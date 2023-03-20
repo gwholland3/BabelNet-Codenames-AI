@@ -41,12 +41,15 @@ def main():
             else:
                 guess = input(f"Guess {i}: ")
             if guess == '_pass':
+                print("Skipping guess")
                 break
             guessed_words.append(guess)
             if guess in red_words:
+                print("You guessed the opponent team's word!")
                 red_words.remove(guess)
                 break
             if guess in bystanders:
+                print("You guessed a bystander")
                 bystanders.remove(guess)
                 break
             if guess == assassin:
@@ -54,6 +57,7 @@ def main():
                 lose = True
                 break
             if guess in blue_words:
+                print("Correct guess")
                 blue_words.remove(guess)
     if not lose:
         print("You guessed all the blue words, you win!")
