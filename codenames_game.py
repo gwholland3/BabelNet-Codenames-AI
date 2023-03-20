@@ -1,17 +1,17 @@
 import random
-import argparse
 
-from babelnet_bots import BabelNetSpymaster, BabelNetFieldOperative
+from babelnet_bots.babelnet_bots import BabelNetSpymaster, BabelNetFieldOperative
 
 
 WORDLIST_FILEPATH = 'data/wordlists/test_words.txt'
 
 
-def main(args):
-    # Retrieve all Codenames words
+def main():
+    # Retrieve list of words to draw from
     with open(WORDLIST_FILEPATH) as f:
         words = f.read().splitlines()
 
+    # Generate a new, random board
     game_words, blue_words, red_words, bystanders, assassin = generate_new_board(words)
 
     print("Initializing bots...")
@@ -104,17 +104,5 @@ def strike(text):
 
 
 if __name__ == '__main__':
-    # TODO: Remove unnecessary args
-    parser = argparse.ArgumentParser(description='Play a game of codenames.')
-    """
-    parser.add_argument('--verbose', action='store_true',
-                        help='print out verbose information'),
-    parser.add_argument('--split-multi-word', default=True)
-    parser.add_argument('--disable-verb-split', default=True)
-    parser.add_argument('--length-exp-scaling', type=int, default=None,
-                        help='Rescale lengths using exponent')
-    """
-    args = parser.parse_args()
-
-    main(args)
+    main()
 

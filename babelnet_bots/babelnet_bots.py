@@ -5,11 +5,8 @@ import re
 import requests
 import string
 import pickle
-from heapq import heappush, heappop
 
 # Gensim
-from gensim.utils import simple_preprocess
-from gensim.models import KeyedVectors
 from gensim.corpora import Dictionary
 import gensim.downloader as api
 
@@ -21,7 +18,7 @@ from nltk.stem import PorterStemmer
 # Graphing
 import networkx as nx
 
-from utils import get_dict2vec_score
+from babelnet_bots.utils import get_dict2vec_score
 
 
 babelnet_relationships_limits = {
@@ -34,17 +31,33 @@ babelnet_relationships_limits = {
 punctuation = re.compile("[" + re.escape(string.punctuation) + "]")
 
 stopwords = [
-    'ourselves', 'hers', 'between', 'yourself', 'but', 'again', 'there', 'about', 'once', 'during', 'out', 'very', 'having', 'with', 'they', 'own', 'an', 'be', 'some', 'for', 'do', 'its', 'yours', 'such', 'into', 'of', 'most', 'itself', 'other', 'off', 'is', 's', 'am', 'or', 'who', 'as', 'from', 'him', 'each', 'the', 'themselves', 'until', 'below', 'are', 'we', 'these', 'your', 'his', 'through', 'don', 'nor', 'me', 'were', 'her', 'more', 'himself', 'this', 'down', 'should', 'our', 'their', 'while', 'above', 'both', 'up', 'to', 'ours', 'had', 'she', 'all', 'no', 'when', 'at', 'any', 'before', 'them', 'same', 'and', 'been', 'have', 'in', 'will', 'on', 'does', 'yourselves', 'then', 'that', 'because', 'what', 'over', 'why', 'so', 'can', 'did', 'not', 'now', 'under', 'he', 'you', 'herself', 'has', 'just', 'where', 'too', 'only', 'myself', 'which', 'those', 'i', 'after', 'few', 'whom', 't', 'being', 'if', 'theirs', 'my', 'against', 'a', 'by', 'doing', 'it', 'how', 'further', 'was', 'here', 'than', 'get', 'put',
+    'ourselves', 'hers', 'between', 'yourself', 'but', 'again', 'there', 'about', 
+    'once', 'during', 'out', 'very', 'having', 'with', 'they', 'own', 'an', 'be', 
+    'some', 'for', 'do', 'its', 'yours', 'such', 'into', 'of', 'most', 'itself', 
+    'other', 'off', 'is', 's', 'am', 'or', 'who', 'as', 'from', 'him', 'each', 
+    'the', 'themselves', 'until', 'below', 'are', 'we', 'these', 'your', 'his', 
+    'through', 'don', 'nor', 'me', 'were', 'her', 'more', 'himself', 'this', 
+    'down', 'should', 'our', 'their', 'while', 'above', 'both', 'up', 'to', 
+    'ours', 'had', 'she', 'all', 'no', 'when', 'at', 'any', 'before', 'them', 
+    'same', 'and', 'been', 'have', 'in', 'will', 'on', 'does', 'yourselves', 
+    'then', 'that', 'because', 'what', 'over', 'why', 'so', 'can', 'did', 'not', 
+    'now', 'under', 'he', 'you', 'herself', 'has', 'just', 'where', 'too', 
+    'only', 'myself', 'which', 'those', 'i', 'after', 'few', 'whom', 't', 
+    'being', 'if', 'theirs', 'my', 'against', 'a', 'by', 'doing', 'it', 'how', 
+    'further', 'was', 'here', 'than', 'get', 'put'
 ]
 
 idf_lower_bound = 0.0006
-dict2vec_embedding_weight = 2.0
+FREQ_WEIGHT = 2
+DICT2VEC_WEIGHT = 2
+
+API_KEY_FILEPATH = 'babelnet_bots/bn_api_key.txt'
 
 
 """
 Configuration for the bot
 """
-class CodenamesConfiguration():
+class Configuration():
     def __init__(
         self,
         verbose=False,
@@ -75,17 +88,14 @@ class BabelNetSpymaster(Spymaster):
     default_single_word_label_scores = (1, 1.1, 1.1, 1.2)
 
     def __init__(self, game_words):
-        with open('bn_api_key.txt') as f:
+        with open(API_KEY_FILEPATH) as f:
             self.api_key = f.read()
 
         # Initialize variables
-        self.configuration = CodenamesConfiguration()
+        self.configuration = Configuration()
         self.configuration.single_word_label_scores = self.default_single_word_label_scores
-        print("Codenames Configuration: ", self.configuration.__dict__)
+        print("Spymaster Configuration: ", self.configuration.__dict__)
 
-        self.nn_to_synset_id = dict()
-        self.graphs = dict()
-        self.dictionary_definitions = dict()
         (
             self.synset_to_main_sense,
             self.synset_to_senses,
@@ -216,11 +226,12 @@ class BabelNetSpymaster(Spymaster):
 
         n_target_words = len(target_words)
 
-        print(f"Clue: {best_clue}, {n_target_words} ({target_words})")
+        if self.configuration.verbose:
+            print(f"Clue: {best_clue}, {n_target_words} ({target_words})")
 
         return best_clue, n_target_words
 
-    def get_clue_for_target_words(self, target_words, opp_words, bystanders, assassin,  penalty=1.0):
+    def get_clue_for_target_words(self, target_words, opp_words, bystanders, assassin, penalty=1.0):
         potential_clues = set()
         for target_word in target_words:
             nns = self.weighted_nns[target_word].keys()
@@ -246,7 +257,7 @@ class BabelNetSpymaster(Spymaster):
             embedding_score = self.rescale_score(target_words, clue, opp_words.union(bystanders).union(set(assassin)))
 
             # TODO: add an agressiveness factor
-            total_score = babelnet_score  + detect_score + embedding_score
+            total_score = babelnet_score + detect_score + embedding_score
 
             if total_score > best_score:
                 best_clue = clue
@@ -274,9 +285,10 @@ class BabelNetSpymaster(Spymaster):
         if clue in stopwords or idf < idf_lower_bound:
             idf = 1.0
 
-        dict2vec_score = dict2vec_embedding_weight * get_dict2vec_score(target_words, clue, opp_words)
+        freq = -idf
+        dict2vec_score = get_dict2vec_score(target_words, clue, opp_words)
 
-        return dict2vec_score + (-2 * idf)
+        return FREQ_WEIGHT * freq + DICT2VEC_WEIGHT * dict2vec_score
 
     def rescale_score(self, target_words, clue, non_team_words):
         """
@@ -373,7 +385,8 @@ class BabelNetSpymaster(Spymaster):
                     lengths = {neighbor: scaling_func(len(path))
                                for neighbor, path in paths.items()}
                 except nx.NodeNotFound as e:
-                    print(e)
+                    if self.configuration.verbose:
+                        print(e)
                     continue
                 for neighbor, length in lengths.items():
                     neighbor_main_sense, neighbor_senses, neighbor_metadata = self.get_cached_labels_from_synset_v5(
@@ -412,10 +425,6 @@ class BabelNetSpymaster(Spymaster):
                         for definition in self.synset_to_definitions[synset]
                         for word in definition.split()
                     )
-
-        self.nn_to_synset_id[word] = nn_w_synsets
-        self.graphs[word] = G
-        self.dictionary_definitions[word] = dictionary_definitions_for_word
 
         nn_w_dists = {k: 1.0 / (v + 1) for k, v in nn_w_dists.items() if k != word}
 
