@@ -5,7 +5,7 @@ Building off of code and ideas from [this paper](https://www.jair.org/index.php/
 
 ## Setup
 
-Follow these instructions to set up and run the codebase locally.
+Follow these instructions to set up the codebase locally.
 
 ### 1. Clone the Repo
 Run your favorite version of the git clone command on this repo. I prefer:
