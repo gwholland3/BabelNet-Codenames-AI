@@ -24,7 +24,7 @@ I recommend doing this in a fresh Python virtual environment. Cd into the repo a
 `pip3 install -r requirements.txt`.
 
 ### 5. Obtain a BabelNet API Key
-The BabelNet bot needs to query the BabelNet API in order to function, and this requires an API key, as ordained by BabelNet themselves. Follow their [instructions](https://babelnet.org/guide) to register a free account and get your own API key (click the "KEY & LIMITS" tab and read the "How do I obtain a BabelNet API key?" section). Your key should look like a hexadecimal number separated by dashes. Once you have it, copy the API key and run the following command from the root of the repo (making sure to replace `{PASTE_API_KEY_HERE}` with your API key):
+The BabelNet bot needs to query the BabelNet API in order to function, and this requires an API key, as ordained by BabelNet themselves. Follow their [instructions](https://babelnet.org/guide) to register a free account and get your own API key (click the "KEY & LIMITS" tab and read the "How do I obtain a BabelNet API key?" section). Your key should look like a long hexadecimal number separated by dashes. Once you have it, copy the API key and run the following command from the root of the repo (making sure to replace `{PASTE_API_KEY_HERE}` with your API key):
 
 `echo "{PASTE API KEY HERE}" > babelnet_bots/bn_api_key.txt`.
 
