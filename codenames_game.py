@@ -1,7 +1,7 @@
 import random
 import argparse
 
-from babelnet_bots import BabelNetSpymaster
+from babelnet_bots import BabelNetSpymaster, BabelNetFieldOperative
 
 
 WORDLIST_FILEPATH = 'data/wordlists/test_words.txt'
@@ -14,6 +14,7 @@ def main(args):
 
     game_words, blue_words, red_words, bystanders, assassin = generate_new_board(words)
 
+    print("Initializing bots...")
     spymaster_bot = BabelNetSpymaster(game_words)
     field_operative_bot = None
 
@@ -24,14 +25,16 @@ def main(args):
     while blue_words and not lose:
         print_board(game_words, guessed_words)
         if spymaster_bot:
+            print("Generating clue...")
             clue, n_target_words = spymaster_bot.give_clue(set(blue_words), set(red_words), set(bystanders), assassin)
-            print(f"Spymaster bot gives clue: {clue} {n_target_words}")
+            print(f"Spymaster bot gives clue: {clue}, {n_target_words}")
             input("Press ENTER to continue")
         else:
             clue = input("Clue: ")
             n_target_words = input("Number of Guesses: ")
         for i in range(n_target_words+1):
             if field_operative_bot:
+                print("Generating guess...")
                 guess = field_operative_bot.make_guess(red_words+blue_words+bystanders+[assassin], clue)
                 print(f"Field Operative bot makes guess: {guess}")
                 input("Press ENTER to continue")
@@ -55,10 +58,6 @@ def main(args):
     if not lose:
         print("You guessed all the blue words, you win!")
     
-    # Draw graphs for all words
-    # for word in game_words:
-    #     spymaster_bot.draw_graph(spymaster_bot.graphs[word], word+"_all", get_labels=True)
-
 
 def generate_new_board(words):
     game_words = random.sample(words, 25)
@@ -107,18 +106,14 @@ def strike(text):
 if __name__ == '__main__':
     # TODO: Remove unnecessary args
     parser = argparse.ArgumentParser(description='Play a game of codenames.')
+    """
     parser.add_argument('--verbose', action='store_true',
                         help='print out verbose information'),
-    parser.add_argument('--visualize', action='store_true',
-                        help='visualize the choice of clues with graphs')
     parser.add_argument('--split-multi-word', default=True)
     parser.add_argument('--disable-verb-split', default=True)
     parser.add_argument('--length-exp-scaling', type=int, default=None,
                         help='Rescale lengths using exponent')
-    parser.add_argument('--no-heuristics', action='store_true',
-                        help='Remove heuristics such as IDF and dict2vec')
-    parser.add_argument('--kim-scoring-function', dest='use_kim_scoring_function', action='store_true',
-                        help='use the kim 2019 et. al. scoring function'),
+    """
     args = parser.parse_args()
 
     main(args)

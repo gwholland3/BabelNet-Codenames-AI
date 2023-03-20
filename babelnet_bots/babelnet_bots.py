@@ -1,12 +1,11 @@
-import heapq
 import gzip
-import itertools
+from itertools import combinations
 import os
 import re
 import requests
 import string
-import numpy
 import pickle
+from heapq import heappush, heappop
 
 # Gensim
 from gensim.utils import simple_preprocess
@@ -21,9 +20,6 @@ from nltk.stem import PorterStemmer
 
 # Graphing
 import networkx as nx
-from networkx.exception import NodeNotFound
-from networkx.drawing.nx_agraph import write_dot, graphviz_layout
-#import matplotlib.pyplot as plt
 
 from utils import get_dict2vec_score
 
@@ -44,8 +40,6 @@ stopwords = [
 idf_lower_bound = 0.0006
 dict2vec_embedding_weight = 2.0
 
-default_single_word_label_scores = (1, 1.1, 1.1, 1.2)
-
 
 """
 Configuration for the bot
@@ -54,44 +48,41 @@ class CodenamesConfiguration():
     def __init__(
         self,
         verbose=False,
-        visualize=False,
         split_multi_word=True,
         disable_verb_split=True,
         length_exp_scaling=None,
-        use_heuristics=True,
-        use_kim_scoring_function=False,
     ):
         self.verbose = verbose
-        self.visualize = visualize
         self.split_multi_word = split_multi_word
         self.disable_verb_split = disable_verb_split
         self.length_exp_scaling = length_exp_scaling
-        self.use_heuristics = use_heuristics
-        self.use_kim_scoring_function = use_kim_scoring_function
 
 
 class BabelNetSpymaster(Spymaster):
 
-    def __init__(self, all_words):
+    # Constants
+    VERB_SUFFIX = "v"
+    NOUN_SUFFIX = "n"
+    ADJ_SUFFIX = "a"
+
+    # File paths to cached babelnet query results
+    file_dir = 'data/babelnet_v6/'
+    synset_main_sense_file = file_dir + 'synset_to_main_sense.txt'
+    synset_senses_file = file_dir + 'synset_to_senses.txt'
+    synset_glosses_file = file_dir + 'synset_to_glosses.txt'
+    synset_metadata_file = file_dir + 'synset_to_metadata.txt'
+
+    default_single_word_label_scores = (1, 1.1, 1.1, 1.2)
+
+    def __init__(self, game_words):
         with open('bn_api_key.txt') as f:
             self.api_key = f.read()
 
-        # constants
-        self.VERB_SUFFIX = "v"
-        self.NOUN_SUFFIX = "n"
-        self.ADJ_SUFFIX = "a"
-
-        #  File paths to cached babelnet query results
-        self.file_dir = 'data/babelnet_v6/'
-        self.synset_main_sense_file = self.file_dir + 'synset_to_main_sense.txt'
-        self.synset_senses_file = self.file_dir + 'synset_to_senses.txt'
-        self.synset_glosses_file = self.file_dir + 'synset_to_glosses.txt'
-        self.synset_metadata_file = self.file_dir + 'synset_to_metadata.txt'
-
         # Initialize variables
         self.configuration = CodenamesConfiguration()
-        self.configuration.single_word_label_scores = default_single_word_label_scores
+        self.configuration.single_word_label_scores = self.default_single_word_label_scores
         print("Codenames Configuration: ", self.configuration.__dict__)
+
         self.nn_to_synset_id = dict()
         self.graphs = dict()
         self.dictionary_definitions = dict()
@@ -107,13 +98,14 @@ class BabelNetSpymaster(Spymaster):
         # Used to get word stems
         self.stemmer = PorterStemmer()
 
-        self.weighted_nn = dict()
-        for word in all_words:
-            self.determine_weighted_nn(word)
+        self.game_words = game_words
+        self.weighted_nns = dict()
+        for word in self.game_words:
+            self.get_weighted_nns(word)
 
         if self.configuration.verbose:
             print("NEAREST NEIGHBORS:")
-            for word, clues in self.weighted_nn.items():
+            for word, clues in self.weighted_nns.items():
                 print(word)
                 print(sorted(clues, key=lambda k: clues[k], reverse=True)[:5])
 
@@ -197,126 +189,118 @@ class BabelNetSpymaster(Spymaster):
 
         return num_docs, word_to_df
 
-    """
-    Required codenames methods
-    """
-
-    def give_clue(self, team_words, opp_words, civilianss, assassin):
-        n = 2
+    def give_clue(self, team_words, opp_words, bystanders, assassin):
+        """
+        Required Codenames method
+        """
         penalty = 1
 
         # potential clue candidates are the intersection of weighted_nns[word] for each word in team_words
         # we need to repeat this for the (|team_words| C n) possible words we can give a clue for
 
-        pq = []
-        for potential_target_word_set in itertools.combinations(team_words, n):
-            highest_clues, score = self.get_highest_clue(
-                potential_target_word_set, opp_words, team_words, penalty)
-            # min heap, so push negative score
-            heapq.heappush(pq, (-1 * score, highest_clues, potential_target_word_set))
+        best_score = float('-inf')
 
-        # sliced_labels = self.get_cached_labels_from_synset(clue)
-        # main_sense, _senses = self.get_cached_labels_from_synset_v5(clue)
+        for n_target_words in range(2, 3):
+            for potential_target_words in combinations(team_words, n_target_words):
+                clue, score = self.get_clue_for_target_words(
+                    potential_target_words, 
+                    opp_words, 
+                    bystanders,
+                    assassin,
+                    penalty
+                )
+                if score > best_score:
+                    best_clue = clue
+                    best_score = score
+                    target_words = potential_target_words
 
-        best_clues = []
-        best_board_words_for_clue = []
-        best_scores = []
-        count = 0
+        n_target_words = len(target_words)
 
-        while pq:
-            score, clues, potential_target_word_set = heapq.heappop(pq)
+        print(f"Clue: {best_clue}, {n_target_words} ({target_words})")
 
-            if count >= 5:
-                break
+        return best_clue, n_target_words
 
-            if self.configuration.visualize:
-                for clue in clues:
-                    self.get_intersecting_graphs(
-                        potential_target_word_set,
-                        clue,
-                        split_multi_word=self.configuration.split_multi_word,
-                    )
-
-            best_clues.append(clues)
-            best_scores.append(score)
-            best_board_words_for_clue.append(potential_target_word_set)
-
-            count += 1
-
-        print(f"Clue: {best_clues[0]}, {n} ({best_board_words_for_clue[0]})")
-
-        return best_clues[0], n
-
-    def get_highest_clue(self, target_words, red_words, blue_words, penalty=1.0):
+    def get_clue_for_target_words(self, target_words, opp_words, bystanders, assassin,  penalty=1.0):
         potential_clues = set()
         for target_word in target_words:
-            nns = self.weighted_nn[target_word]
+            nns = self.weighted_nns[target_word].keys()
             potential_clues.update(nns)
 
-        highest_scoring_clues = []
-        highest_score = float("-inf")
+        best_score = float('-inf')
 
         for clue in potential_clues:
-            # don't consider clues which are a substring of any board words
-            if not self.is_valid_clue(clue, red_words, blue_words):
+            # Don't consider clues which are a substring of any board words
+            if not self.is_valid_clue(clue):
                 continue
-            blue_word_counts = []
-            for blue_word in target_words:
-                if clue in self.weighted_nn[blue_word]:
-                    blue_word_counts.append(self.weighted_nn[blue_word][clue])
+
+            babelnet_score = 0
+            for target_word in target_words:
+                if clue in self.weighted_nns[target_word]:
+                    babelnet_score += self.weighted_nns[target_word][clue]
                 else:
-                    blue_word_counts.append(self.get_word_similarity(blue_word, clue))
+                    babelnet_score += -1
 
-            heuristic_score = 0
-
-            """
-            self._write_to_debug_file([
-                "\n", clue, "score breakdown for", " ".join(target_words),
-                "\n\tblue words score:", round(sum(blue_word_counts),3),
-            ])
-            """
-
-            if self.configuration.use_heuristics is True:
-                # the larger the idf is, the more uncommon the word
-                idf = (1.0/self.word_to_df[clue]) if clue in self.word_to_df else 1.0
-
-                # prune out super common words (e.g. "get", "go")
-                if (clue in stopwords or idf < idf_lower_bound):
-                    idf = 1.0
-                dict2vec_score = dict2vec_embedding_weight * get_dict2vec_score(target_words, clue, red_words)
-
-                heuristic_score = dict2vec_score + (-2*idf)
-                #self._write_to_debug_file([" IDF:", round(-2*idf,3), "dict2vec score:", round(dict2vec_score,3)])
+            detect_score = self.get_detect_score(clue, target_words, opp_words)
 
             # Give embedding methods the opportunity to rescale the score using their own heuristics
-            embedding_score = self.rescale_score(target_words, clue, red_words)
+            embedding_score = self.rescale_score(target_words, clue, opp_words.union(bystanders).union(set(assassin)))
 
-            if (self.configuration.use_kim_scoring_function):
-                score = min(blue_word_counts) + heuristic_score
-            else:
-                score = sum(blue_word_counts) + embedding_score + heuristic_score
+            # TODO: add an agressiveness factor
+            total_score = babelnet_score  + detect_score + embedding_score
 
-            if score > highest_score:
-                highest_scoring_clues = [clue]
-                highest_score = score
-            elif score == highest_score:
-                highest_scoring_clues.append(clue)
+            if total_score > best_score:
+                best_clue = clue
+                best_score = total_score
 
-        return highest_scoring_clues, highest_score
+        return best_clue, best_score
 
-    def is_valid_clue(self, clue, red_words, blue_words):
-        # no need to remove red/blue words from potential_clues elsewhere
-        # since we check for validity here
-        for board_word in red_words.union(blue_words):
+    def is_valid_clue(self, clue):
+        """
+        No need to remove board words from potential_clues elsewhere
+        since we check for validity here
+        """
+        for board_word in self.game_words:
             # Check if clue or board_word are substring of each other, or if they share the same word stem
-            if (clue in board_word or board_word in clue or self.stemmer.stem(clue) == self.stemmer.stem(board_word) or not clue.isalpha()):
+            if clue in board_word or board_word in clue or self.stemmer.stem(clue) == self.stemmer.stem(board_word) or not clue.isalpha():
                 return False
+
         return True
 
-    def get_word_similarity(self, word1, word2):
-        return -1
+    def get_detect_score(self, clue, target_words, opp_words):
+        # The larger the idf is, the more uncommon the word
+        idf = (1.0 / self.word_to_df[clue]) if clue in self.word_to_df else 1.0
 
-    def determine_weighted_nn(self, word, filter_entities=True):
+        # Prune out super common words (e.g. "get", "go")
+        if clue in stopwords or idf < idf_lower_bound:
+            idf = 1.0
+
+        dict2vec_score = dict2vec_embedding_weight * get_dict2vec_score(target_words, clue, opp_words)
+
+        return dict2vec_score + (-2 * idf)
+
+    def rescale_score(self, target_words, clue, non_team_words):
+        """
+        :param target_words: potential board words we could apply this clue to
+        :param clue: potential clue
+        :param opp_words: opponent's words
+        returns: using IDF and dictionary definition heuristics, how much to add to the score for this potential clue give these board words
+        """
+
+        max_non_team_word_similarity = float("-inf")
+        found_clue = False
+        for non_team_word in non_team_words:
+            if non_team_word in self.weighted_nns and clue in self.weighted_nns[non_team_word]:
+                similarity = self.weighted_nns[non_team_word][clue]
+                found_clue = True
+                if similarity > max_non_team_word_similarity:
+                    max_non_team_word_similarity = similarity
+        # If we haven't encountered our potential clue in any of the non-team word's nearest neighbors, set max_non_team_word_similarity to 0
+        if found_clue == False:
+            max_non_team_word_similarity = 0.0
+
+        return 0.5 * max_non_team_word_similarity
+
+    def get_weighted_nns(self, word, filter_entities=True):
         """
         :param word: the codeword to get weighted nearest neighbors for
         returns: a dictionary mapping nearest neighbors (str) to distances from codeword (int)
@@ -388,7 +372,7 @@ class BabelNetSpymaster(Spymaster):
                         scaling_func = lambda x : x
                     lengths = {neighbor: scaling_func(len(path))
                                for neighbor, path in paths.items()}
-                except NodeNotFound as e:
+                except nx.NodeNotFound as e:
                     print(e)
                     continue
                 for neighbor, length in lengths.items():
@@ -435,36 +419,7 @@ class BabelNetSpymaster(Spymaster):
 
         nn_w_dists = {k: 1.0 / (v + 1) for k, v in nn_w_dists.items() if k != word}
 
-        self.weighted_nn[word] = nn_w_dists
-
-    def rescale_score(self, target_words, clue, red_words):
-        """
-        :param target_words: potential board words we could apply this clue to
-        :param clue: potential clue
-        :param red_words: opponent's words
-        returns: using IDF and dictionary definition heuristics, how much to add to the score for this potential clue give these board words
-        """
-
-        max_red_similarity = float("-inf")
-        found_clue = False
-        for red_word in red_words:
-            if red_word in self.weighted_nn and clue in self.weighted_nn[red_word]:
-                similarity = self.weighted_nn[red_word][clue]
-                found_clue = True
-                if similarity > max_red_similarity:
-                    max_red_similarity = similarity
-        # If we haven't encountered our potential clue in any of the red word's nearest neighbors, set max_red_similarity to 0
-        if found_clue == False:
-            max_red_similarity = 0.0
-
-        #if self.configuration.debug_file:
-        if False:
-            with open(self.configuration.debug_file, 'a') as f:
-                f.write(" ".join([str(x) for x in [
-                    "max red similarity", round(-0.5*max_red_similarity,3), "\n"
-                ]]))
-
-        return 0.5*max_red_similarity
+        self.weighted_nns[word] = nn_w_dists
 
     """
     Babelnet methods
@@ -543,8 +498,6 @@ class BabelNetSpymaster(Spymaster):
                     "synsetType": synsetType,
                 }
 
-
-
     def get_labels_from_synset_v5_json(self, synset):
         url = 'https://babelnet.io/v5/getSynset'
         params = {
@@ -564,7 +517,6 @@ class BabelNetSpymaster(Spymaster):
         return parts[0], single_word
 
     def get_single_word_labels_v5(self, lemma, senses, split_multi_word=False):
-        """"""
         main_single, main_multi, other_single, other_multi = self.configuration.single_word_label_scores
         single_word_labels = []
         parsed_lemma, single_word = self.parse_lemma_v5(lemma)
@@ -588,117 +540,6 @@ class BabelNetSpymaster(Spymaster):
             assert not split_multi_word
             return [(lemma.split("#")[0], 1)]
         return single_word_labels
-
-    """
-    Visualization
-    """
-
-    def get_intersecting_graphs(self, word_set, clue, split_multi_word):
-        # clue is the word that intersects for this word_set
-        # for example if we have the word_set (beijing, phoenix) and clue city,
-        # this method will produce a directed graph that shows the path of intersection
-        clue_graph = nx.DiGraph()
-        word_set_graphs = [nx.DiGraph() for _ in word_set]
-
-        for word in word_set:
-            # Create graph that shows the intersection from the clue to the word_set
-            if clue in self.nn_to_synset_id[word]:
-                clue_synset = self.nn_to_synset_id[word][clue]  # synset of the clue
-            else:
-                if self.configuration.verbose:
-                    print("Clue ", clue, "not found for word", word)
-                continue
-            word_graph = self.graphs[word]
-            shortest_path = []
-            shortest_path_length = float("inf")
-            with open(self.file_dir + word + '_synsets', 'r') as f:
-                for line in f:
-                    synset = line.strip()
-                    try:
-                        path = nx.shortest_path(
-                            word_graph, synset, clue_synset)
-                        if len(path) < shortest_path_length:
-                            shortest_path_length = len(path)
-                            shortest_path = path
-                            shortest_path_synset = synset
-                    except:
-                        if self.configuration.verbose:
-                            print("No path between", synset, clue, clue_synset)
-
-                # path goes from source (word in word_set) to target (clue)
-                shortest_path_labels = []
-                for synset in shortest_path:
-                    main_sense, senses, _ = self.get_cached_labels_from_synset_v5(synset)
-                    if self.configuration.disable_verb_split and synset.endswith(self.VERB_SUFFIX):
-                        split_multi_word = False
-
-                    single_word_label = self.get_single_word_labels_v5(
-                        main_sense, senses, split_multi_word)[0][0]
-                    shortest_path_labels.append(single_word_label)
-
-                #if self.configuration.debug_file:
-                if False:
-                    with open(self.configuration.debug_file, 'a') as f:
-                        f.write(
-                            " ".join([str(x) for x in ["shortest path from", word, shortest_path_synset,
-                            "to clue", clue, clue_synset, ":", shortest_path_labels, "\n"]])
-                        )
-                else:
-                    print("shortest path from", word, shortest_path_synset,
-                        "to clue", clue, clue_synset, ":", shortest_path_labels)
-
-                formatted_labels = [label.replace(
-                    ' ', '\n') for label in shortest_path_labels]
-                formatted_labels.reverse()
-                nx.add_path(clue_graph, formatted_labels)
-
-        #self.draw_graph(clue_graph, ('_').join([clue] + [word for word in word_set]))
-
-    """
-    def draw_graph(self, graph, graph_name, get_labels=False):
-        write_dot(graph, 'test.dot')
-        pos = graphviz_layout(graph, prog='dot')
-
-        # if we need to get labels for our graph (because the node text is synset ids)
-        # we will create a dictionary { node : label } to pass into our graphing options
-        nodes_to_labels = dict()
-        current_labels = nx.draw_networkx_labels(graph, pos=pos)
-
-        if get_labels:
-            for synset_id in current_labels:
-                main_sense, senses, _ = self.get_cached_labels_from_synset_v5(
-                    synset_id)
-                nodes_to_labels[synset_id] = main_sense
-        else:
-            nodes_to_labels = {label: label for label in current_labels}
-
-        plt.figure()
-        options = {
-            'node_color': 'white',
-            'line_color': 'black',
-            'linewidths': 0,
-            'width': 0.5,
-            'pos': pos,
-            'with_labels': True,
-            'font_color': 'black',
-            'font_size': 3,
-            'labels': nodes_to_labels,
-        }
-        nx.draw(graph, **options)
-
-        if not os.path.exists('intersection_graphs'):
-            os.makedirs('intersection_graphs')
-        filename = 'intersection_graphs/' + graph_name + '.png'
-        # margins
-        plot_margin = 0.35
-        x0, x1, y0, y1 = plt.axis()
-        plt.axis((x0 - plot_margin,
-                  x1 + plot_margin,
-                  y0 - plot_margin,
-                  y1 + plot_margin))
-        plt.savefig(filename, dpi=300)
-        plt.close()
-        """
 
 
 class BabelNetFieldOperative(FieldOperative):

@@ -6,10 +6,6 @@ from scipy.spatial import distance
 word_to_dict2vec_embeddings = None
 
 
-def is_single_word(word):
-	return len(neighbor.split("_")) == 1 and len(neighbor.split("-")) == 1
-
-
 def get_dict2vec_score(chosen_words, potential_clue, red_words):
 	"""
 	:param chosen_words: the board words intended for the potential clue

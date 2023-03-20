@@ -4,12 +4,13 @@ from abc import ABC, abstractmethod
 class Spymaster(ABC):
 
     @abstractmethod
-    def give_clue(self, team_words, opp_words, civilians, assassin):
+    def give_clue(self, team_words, opp_words, bystanders, assassin):
         """
         Takes in the remaining unguessed words on the board, grouped by their category/color.
         Returns a tuple of the clue word followed by an integer number of guesses.
         """
         pass
+
 
 class FieldOperative(ABC):
 
