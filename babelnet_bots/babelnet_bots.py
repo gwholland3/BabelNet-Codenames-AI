@@ -77,11 +77,11 @@ class BabelNetSpymaster(Spymaster):
     ADJ_SUFFIX = "a"
 
     # File paths to cached babelnet query results
-    file_dir = 'data/babelnet_v6/'
-    synset_main_sense_file = file_dir + 'synset_to_main_sense.txt'
-    synset_senses_file = file_dir + 'synset_to_senses.txt'
-    synset_glosses_file = file_dir + 'synset_to_glosses.txt'
-    synset_metadata_file = file_dir + 'synset_to_metadata.txt'
+    bn_data_dir = 'data/babelnet_v6/'
+    synset_main_sense_file = bn_data_dir + 'synset_to_main_sense.txt'
+    synset_senses_file = bn_data_dir + 'synset_to_senses.txt'
+    synset_glosses_file = bn_data_dir + 'synset_to_glosses.txt'
+    synset_metadata_file = bn_data_dir + 'synset_to_metadata.txt'
 
     default_single_word_label_scores = (1, 1.1, 1.1, 1.2)
 
@@ -413,7 +413,7 @@ class BabelNetSpymaster(Spymaster):
         count_by_relation_group = {relationship: 0 for relationship in babelnet_relationships_limits}
 
         G = nx.DiGraph()
-        with gzip.open(self.file_dir + word + '.gz', 'r') as f:
+        with gzip.open(self.bn_data_dir + word + '.gz', 'r') as f:
             for line in f:
                 (
                     source, 
@@ -432,7 +432,7 @@ class BabelNetSpymaster(Spymaster):
         nn_w_dists = {}
         nn_w_synsets = {}
         dictionary_definitions_for_word = []
-        with open(self.file_dir + word + '_synsets', 'r') as f:
+        with open(self.bn_data_dir + word + '_synsets', 'r') as f:
             for line in f:
                 synset = line.strip()
                 try:
@@ -515,6 +515,18 @@ class BabelNetSpymaster(Spymaster):
         metadata = self.synset_to_metadata[synset] if get_metadata else {}
         return main_sense, senses, metadata
 
+    def get_labels_from_synset_v5_json(self, synset):
+        url = 'https://babelnet.io/v5/getSynset'
+        params = {
+            'id': synset,
+            'key': self.api_key
+        }
+        headers = {'Accept-Encoding': 'gzip'}
+        res = requests.get(url=url, params=params, headers=headers)
+        if "message" in res.json() and "limit" in res.json()["message"]:
+            raise ValueError(res.json()["message"])
+        return res.json()
+
     def write_synset_labels_v5(self, synset, json):
         """Write to synset_main_sense_file, synset_senses_file, and synset_glosses_file"""
         if synset not in self.synset_to_main_sense:
@@ -573,24 +585,6 @@ class BabelNetSpymaster(Spymaster):
                     "synsetType": synsetType,
                 }
 
-    def get_labels_from_synset_v5_json(self, synset):
-        url = 'https://babelnet.io/v5/getSynset'
-        params = {
-            'id': synset,
-            'key': self.api_key
-        }
-        headers = {'Accept-Encoding': 'gzip'}
-        res = requests.get(url=url, params=params, headers=headers)
-        if "message" in res.json() and "limit" in res.json()["message"]:
-            raise ValueError(res.json()["message"])
-        return res.json()
-
-    def parse_lemma_v5(self, lemma):
-        lemma_parsed = lemma.split('#')[0]
-        parts = lemma_parsed.split('_')
-        single_word = len(parts) == 1 or parts[1].startswith('(')
-        return parts[0], single_word
-
     def get_single_word_labels_v5(self, lemma, senses, split_multi_word=False):
         main_single, main_multi, other_single, other_multi = self.configuration.single_word_label_scores
         single_word_labels = []
@@ -615,6 +609,12 @@ class BabelNetSpymaster(Spymaster):
             assert not split_multi_word
             return [(lemma.split("#")[0], 1)]
         return single_word_labels
+
+    def parse_lemma_v5(self, lemma):
+        lemma_parsed = lemma.split('#')[0]
+        parts = lemma_parsed.split('_')
+        single_word = len(parts) == 1 or parts[1].startswith('(')
+        return parts[0], single_word
 
 
 class BabelNetFieldOperative(FieldOperative):
