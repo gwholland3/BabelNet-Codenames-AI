@@ -5,6 +5,7 @@ import re
 import requests
 import string
 import pickle
+from scipy.spatial import distance
 
 # Gensim
 from gensim.corpora import Dictionary
@@ -12,23 +13,17 @@ import gensim.downloader as api
 
 from codenames_bots import Spymaster, FieldOperative
 
-# nltk
-from nltk.stem import PorterStemmer
+from nltk.stem import WordNetLemmatizer
 
 # Graphing
 import networkx as nx
 
-from babelnet_bots.utils import get_dict2vec_score
-
 
 babelnet_relationships_limits = {
     "HYPERNYM": float("inf"),
-    "OTHER": 0,
-    "MERONYM": 20,
     "HYPONYM": 20,
+    "MERONYM": 20,
 }
-
-punctuation = re.compile("[" + re.escape(string.punctuation) + "]")
 
 stopwords = [
     'ourselves', 'hers', 'between', 'yourself', 'but', 'again', 'there', 'about', 
@@ -53,11 +48,14 @@ DICT2VEC_WEIGHT = 2
 
 API_KEY_FILEPATH = 'babelnet_bots/bn_api_key.txt'
 
+dict2vec_embeddings = None
+
 
 """
 Configuration for the bot
 """
 class Configuration():
+
     def __init__(
         self,
         verbose=False,
@@ -103,10 +101,14 @@ class BabelNetSpymaster(Spymaster):
             self.synset_to_metadata,
         ) = self._load_synset_data_v5()
 
-        self.num_docs, self.word_to_df = self._load_document_frequencies()  # dictionary of word to document frequency
+        with open('data/word_to_dict2vec_embeddings','rb') as f:
+            self.dict2vec_embeddings = pickle.load(f)
 
-        # Used to get word stems
-        self.stemmer = PorterStemmer()
+        # Dictionary of word to document frequency
+        self.num_docs, self.word_to_df = self._load_document_frequencies()
+
+        # Used to get word lemmas
+        self.lemmatizer = WordNetLemmatizer()
 
         self.game_words = game_words
         self.weighted_nns = dict()
@@ -203,13 +205,11 @@ class BabelNetSpymaster(Spymaster):
         """
         Required Codenames method
         """
-        penalty = 1
 
-        # potential clue candidates are the intersection of weighted_nns[word] for each word in team_words
-        # we need to repeat this for the (|team_words| C n) possible words we can give a clue for
-
+        # Keep track of the best-looking clue across all possibilities
         best_score = float('-inf')
 
+        # Check all combinations of target words
         for n_target_words in range(2, 3):
             for potential_target_words in combinations(team_words, n_target_words):
                 clue, score = self.get_clue_for_target_words(
@@ -217,7 +217,6 @@ class BabelNetSpymaster(Spymaster):
                     opp_words, 
                     bystanders,
                     assassin,
-                    penalty
                 )
                 if score > best_score:
                     best_clue = clue
@@ -231,7 +230,7 @@ class BabelNetSpymaster(Spymaster):
 
         return best_clue, n_target_words
 
-    def get_clue_for_target_words(self, target_words, opp_words, bystanders, assassin, penalty=1.0):
+    def get_clue_for_target_words(self, target_words, opp_words, bystanders, assassin):
         potential_clues = set()
         for target_word in target_words:
             nns = self.weighted_nns[target_word].keys()
@@ -240,10 +239,14 @@ class BabelNetSpymaster(Spymaster):
         best_score = float('-inf')
 
         for clue in potential_clues:
-            # Don't consider clues which are a substring of any board words
+            # Make sure clue would be valid according to Codenames rules
             if not self.is_valid_clue(clue):
                 continue
 
+            """
+            babelnet_score is a score based on the clue's distance to the target words
+            in the BabelNet graph
+            """
             babelnet_score = 0
             for target_word in target_words:
                 if clue in self.weighted_nns[target_word]:
@@ -251,13 +254,20 @@ class BabelNetSpymaster(Spymaster):
                 else:
                     babelnet_score += -1
 
+            """
+            opp_word_penalty is a penalty for clues that are similar to opponent words
+            """
+            non_team_words = opp_words.union(bystanders).union(set((assassin,)))
+            opp_word_penalty = self.penalize(clue, target_words, non_team_words)
+
+            """
+            detect_score is a score based on the clue's rarity and its dictionary
+            similarity to target words
+            """
             detect_score = self.get_detect_score(clue, target_words, opp_words)
 
-            # Give embedding methods the opportunity to rescale the score using their own heuristics
-            embedding_score = self.rescale_score(target_words, clue, opp_words.union(bystanders).union(set(assassin)))
-
             # TODO: add an agressiveness factor
-            total_score = babelnet_score + detect_score + embedding_score
+            total_score = babelnet_score - 0.5 * opp_word_penalty + detect_score
 
             if total_score > best_score:
                 best_clue = clue
@@ -267,61 +277,106 @@ class BabelNetSpymaster(Spymaster):
 
     def is_valid_clue(self, clue):
         """
-        No need to remove board words from potential_clues elsewhere
-        since we check for validity here
+        A valid clue must be one word consisting of letters only. 
+        It also can't be any form of an unguessed board word 
+        (such as "broken" when "break" is on the board), nor can 
+        either the clue or an unguessed board word be a substring
+        of each other.
         """
         for board_word in self.game_words:
-            # Check if clue or board_word are substring of each other, or if they share the same word stem
-            if clue in board_word or board_word in clue or self.stemmer.stem(clue) == self.stemmer.stem(board_word) or not clue.isalpha():
+            if clue in board_word or board_word in clue or self.lemmatizer.lemmatize(clue) == self.lemmatizer.lemmatize(board_word) or not clue.isalpha():
                 return False
 
         return True
 
+    def penalize(self, clue, target_words, non_team_words):
+        """
+        :param target_words: potential board words we could apply this clue to
+        :param clue: potential clue
+        :param non_team_words: all words not belonging to own team
+        """
+
+        max_non_team_word_similarity = 0.0
+        for non_team_word in non_team_words:
+            if clue in self.weighted_nns[non_team_word]:
+                similarity = self.weighted_nns[non_team_word][clue]
+                if similarity > max_non_team_word_similarity:
+                    max_non_team_word_similarity = similarity
+
+        return max_non_team_word_similarity
+
     def get_detect_score(self, clue, target_words, opp_words):
+        """
+        returns: using IDF and dictionary definition heuristics, how much to add to the score for this potential clue give these board words
+        """
+
         # The larger the idf is, the more uncommon the word
         idf = (1.0 / self.word_to_df[clue]) if clue in self.word_to_df else 1.0
 
-        # Prune out super common words (e.g. "get", "go")
+        # Prune out super common words (e.g. "get", "go") and super rare words
         if clue in stopwords or idf < idf_lower_bound:
             idf = 1.0
 
         freq = -idf
-        dict2vec_score = get_dict2vec_score(target_words, clue, opp_words)
+        dict2vec_score = self.get_dict2vec_score(clue, target_words, opp_words)
 
         return FREQ_WEIGHT * freq + DICT2VEC_WEIGHT * dict2vec_score
 
-    def rescale_score(self, target_words, clue, non_team_words):
+    def get_dict2vec_score(self, clue, target_words, opp_words):
         """
-        :param target_words: potential board words we could apply this clue to
-        :param clue: potential clue
-        :param opp_words: opponent's words
-        returns: using IDF and dictionary definition heuristics, how much to add to the score for this potential clue give these board words
+        :param target_words: the board words intended for the potential clue
+        :param clue: potential candidate clue
+        :param opp_words: the opponent's words on the board
+        returns: the similarity of the two input embedding vectors using their cosine distance
         """
 
-        max_non_team_word_similarity = float("-inf")
-        found_clue = False
-        for non_team_word in non_team_words:
-            if non_team_word in self.weighted_nns and clue in self.weighted_nns[non_team_word]:
-                similarity = self.weighted_nns[non_team_word][clue]
-                found_clue = True
-                if similarity > max_non_team_word_similarity:
-                    max_non_team_word_similarity = similarity
-        # If we haven't encountered our potential clue in any of the non-team word's nearest neighbors, set max_non_team_word_similarity to 0
-        if found_clue == False:
-            max_non_team_word_similarity = 0.0
+        if clue not in self.dict2vec_embeddings:
+            return 0.0
 
-        return 0.5 * max_non_team_word_similarity
+        clue_embedding = self.dict2vec_embeddings[clue]
+        target_word_similarity_sum = 0.0
+        for target_word in target_words:
+            if target_word in self.dict2vec_embeddings:
+                target_word_embedding = self.dict2vec_embeddings[target_word]
+                dict2vec_similarity = self.get_similarity(clue_embedding, target_word_embedding)
+                target_word_similarity_sum += dict2vec_similarity
+
+        max_opp_similarity = float('-inf')
+        for opp_word in opp_words:
+            if opp_word in self.dict2vec_embeddings:
+                opp_word_embedding = self.dict2vec_embeddings[opp_word]
+                opp_word_similarity = self.get_similarity(clue_embedding, opp_word_embedding)
+                if opp_word_similarity > max_opp_similarity:
+                    max_opp_similarity = opp_word_similarity
+
+        return target_word_similarity_sum - max_opp_similarity
+
+    def get_similarity(self, embedding1, embedding2):
+        """
+        :param embedding1: a dict2vec word embedding
+        :param embedding2: another dict2vec word embedding
+        returns: the cosine similarity of the two input embedding vectors
+        """
+
+        cosine_distance = distance.cosine(embedding1, embedding2)
+
+        # Convert from cosine distance to cosine similarity
+        cosine_similarity = 1 - cosine_distance
+
+        return cosine_similarity
 
     def get_weighted_nns(self, word, filter_entities=True):
         """
         :param word: the codeword to get weighted nearest neighbors for
         returns: a dictionary mapping nearest neighbors (str) to distances from codeword (int)
         """
+
         def should_add_relationship(relationship, level):
-            if relationship != 'HYPERNYM' and level > 1:
+            if level > 1 and relationship != 'HYPERNYM':
                 return False
-            return relationship in babelnet_relationships_limits.keys() and \
-                count_by_relation_group[relationship] < babelnet_relationships_limits[relationship]
+            if relationship not in babelnet_relationships_limits:
+                return False
+            return count_by_relation_group[relationship] < babelnet_relationships_limits[relationship]
 
         def _single_source_paths_filter(G, firstlevel, paths, cutoff, join):
             level = 0                  # the current level
@@ -339,29 +394,38 @@ class BabelNetSpymaster(Spymaster):
                 level += 1
             return paths
 
-        def single_source_paths_filter(G, source, cutoff=None):
+        def single_source_paths_filter(G, source, cutoff=float('inf')):
             if source not in G:
                 raise nx.NodeNotFound("Source {} not in G".format(source))
 
             def join(p1, p2):
                 return p1 + p2
+
+            """
             if cutoff is None:
                 cutoff = float('inf')
+                """
             nextlevel = {source: 1}     # list of nodes to check at next level
             # paths dictionary  (paths to key from source)
             paths = {source: [source]}
             return dict(_single_source_paths_filter(G, nextlevel, paths, cutoff, join))
 
-        count_by_relation_group = {
-            key: 0 for key in babelnet_relationships_limits.keys()}
+        count_by_relation_group = {relationship: 0 for relationship in babelnet_relationships_limits}
 
         G = nx.DiGraph()
         with gzip.open(self.file_dir + word + '.gz', 'r') as f:
             for line in f:
-                source, target, language, short_name, relation_group, is_automatic, level = line.decode(
-                    "utf-8").strip().split('\t')
+                (
+                    source, 
+                    target, 
+                    language, 
+                    short_name, 
+                    relation_group, 
+                    is_automatic, 
+                    level
+                ) = line.decode('utf-8').strip().split('\t')
 
-                if should_add_relationship(relation_group, int(level)) and is_automatic == 'False':
+                if is_automatic == 'False' and should_add_relationship(relation_group, int(level)):
                     G.add_edge(source, target, relationship=short_name)
                     count_by_relation_group[relation_group] += 1
 
@@ -390,7 +454,8 @@ class BabelNetSpymaster(Spymaster):
                     continue
                 for neighbor, length in lengths.items():
                     neighbor_main_sense, neighbor_senses, neighbor_metadata = self.get_cached_labels_from_synset_v5(
-                        neighbor, get_metadata=filter_entities)
+                        neighbor, get_metadata=filter_entities
+                    )
                     # Note: this filters entity clues, not intermediate entity nodes
                     if filter_entities and neighbor_metadata["synsetType"] != "CONCEPT":
                         if self.configuration.verbose:
@@ -421,7 +486,7 @@ class BabelNetSpymaster(Spymaster):
                 # get definitions
                 if synset in self.synset_to_definitions:
                     dictionary_definitions_for_word.extend(
-                        self.stemmer.stem(word.lower().translate(str.maketrans('', '', string.punctuation)))
+                        self.lemmatizer.lemmatize(word.lower().translate(str.maketrans('', '', string.punctuation)))
                         for definition in self.synset_to_definitions[synset]
                         for word in definition.split()
                     )
@@ -429,6 +494,7 @@ class BabelNetSpymaster(Spymaster):
         nn_w_dists = {k: 1.0 / (v + 1) for k, v in nn_w_dists.items() if k != word}
 
         self.weighted_nns[word] = nn_w_dists
+
 
     """
     Babelnet methods
