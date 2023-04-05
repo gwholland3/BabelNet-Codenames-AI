@@ -26,19 +26,19 @@ babelnet_relationships_limits = {
 }
 
 stopwords = [
-    'ourselves', 'hers', 'between', 'yourself', 'but', 'again', 'there', 'about', 
-    'once', 'during', 'out', 'very', 'having', 'with', 'they', 'own', 'an', 'be', 
-    'some', 'for', 'do', 'its', 'yours', 'such', 'into', 'of', 'most', 'itself', 
-    'other', 'off', 'is', 's', 'am', 'or', 'who', 'as', 'from', 'him', 'each', 
-    'the', 'themselves', 'until', 'below', 'are', 'we', 'these', 'your', 'his', 
-    'through', 'don', 'nor', 'me', 'were', 'her', 'more', 'himself', 'this', 
-    'down', 'should', 'our', 'their', 'while', 'above', 'both', 'up', 'to', 
-    'ours', 'had', 'she', 'all', 'no', 'when', 'at', 'any', 'before', 'them', 
-    'same', 'and', 'been', 'have', 'in', 'will', 'on', 'does', 'yourselves', 
-    'then', 'that', 'because', 'what', 'over', 'why', 'so', 'can', 'did', 'not', 
-    'now', 'under', 'he', 'you', 'herself', 'has', 'just', 'where', 'too', 
-    'only', 'myself', 'which', 'those', 'i', 'after', 'few', 'whom', 't', 
-    'being', 'if', 'theirs', 'my', 'against', 'a', 'by', 'doing', 'it', 'how', 
+    'ourselves', 'hers', 'between', 'yourself', 'but', 'again', 'there', 'about',
+    'once', 'during', 'out', 'very', 'having', 'with', 'they', 'own', 'an', 'be',
+    'some', 'for', 'do', 'its', 'yours', 'such', 'into', 'of', 'most', 'itself',
+    'other', 'off', 'is', 's', 'am', 'or', 'who', 'as', 'from', 'him', 'each',
+    'the', 'themselves', 'until', 'below', 'are', 'we', 'these', 'your', 'his',
+    'through', 'don', 'nor', 'me', 'were', 'her', 'more', 'himself', 'this',
+    'down', 'should', 'our', 'their', 'while', 'above', 'both', 'up', 'to',
+    'ours', 'had', 'she', 'all', 'no', 'when', 'at', 'any', 'before', 'them',
+    'same', 'and', 'been', 'have', 'in', 'will', 'on', 'does', 'yourselves',
+    'then', 'that', 'because', 'what', 'over', 'why', 'so', 'can', 'did', 'not',
+    'now', 'under', 'he', 'you', 'herself', 'has', 'just', 'where', 'too',
+    'only', 'myself', 'which', 'those', 'i', 'after', 'few', 'whom', 't',
+    'being', 'if', 'theirs', 'my', 'against', 'a', 'by', 'doing', 'it', 'how',
     'further', 'was', 'here', 'than', 'get', 'put'
 ]
 
@@ -47,26 +47,6 @@ FREQ_WEIGHT = 2
 DICT2VEC_WEIGHT = 2
 
 API_KEY_FILEPATH = 'babelnet_bots/bn_api_key.txt'
-
-dict2vec_embeddings = None
-
-
-"""
-Configuration for the bot
-"""
-class Configuration():
-
-    def __init__(
-        self,
-        verbose=False,
-        split_multi_word=True,
-        disable_verb_split=True,
-        length_exp_scaling=None,
-    ):
-        self.verbose = verbose
-        self.split_multi_word = split_multi_word
-        self.disable_verb_split = disable_verb_split
-        self.length_exp_scaling = length_exp_scaling
 
 
 class BabelNetSpymaster(Spymaster):
@@ -80,28 +60,27 @@ class BabelNetSpymaster(Spymaster):
     bn_data_dir = 'data/babelnet_v6/'
     synset_main_sense_file = bn_data_dir + 'synset_to_main_sense.txt'
     synset_senses_file = bn_data_dir + 'synset_to_senses.txt'
-    synset_glosses_file = bn_data_dir + 'synset_to_glosses.txt'
     synset_metadata_file = bn_data_dir + 'synset_to_metadata.txt'
 
-    default_single_word_label_scores = (1, 1.1, 1.1, 1.2)
+    verbose = False
+    split_multi_word = True
+    disable_verb_split = True
+    length_exp_scaling = None
+    single_word_label_scores = (1, 1.1, 1.1, 1.2)
+
+    given_clues = []
 
     def __init__(self, game_words):
         with open(API_KEY_FILEPATH) as f:
             self.api_key = f.read()
 
-        # Initialize variables
-        self.configuration = Configuration()
-        self.configuration.single_word_label_scores = self.default_single_word_label_scores
-        print("Spymaster Configuration: ", self.configuration.__dict__)
-
         (
             self.synset_to_main_sense,
             self.synset_to_senses,
-            self.synset_to_definitions,
             self.synset_to_metadata,
         ) = self._load_synset_data_v5()
 
-        with open('data/word_to_dict2vec_embeddings','rb') as f:
+        with open('data/word_to_dict2vec_embeddings', 'rb') as f:
             self.dict2vec_embeddings = pickle.load(f)
 
         # Dictionary of word to document frequency
@@ -115,7 +94,7 @@ class BabelNetSpymaster(Spymaster):
         for word in self.game_words:
             self.get_weighted_nns(word)
 
-        if self.configuration.verbose:
+        if self.verbose:
             print("NEAREST NEIGHBORS:")
             for word, clues in self.weighted_nns.items():
                 print(word)
@@ -129,7 +108,6 @@ class BabelNetSpymaster(Spymaster):
         """Load synset_to_main_sense"""
         synset_to_main_sense = {}
         synset_to_senses = {}
-        synset_to_definitions = {}
         synset_to_metadata = {}
         if os.path.exists(self.synset_main_sense_file):
             with open(self.synset_main_sense_file, "r") as f:
@@ -147,32 +125,20 @@ class BabelNetSpymaster(Spymaster):
                     if source == "WIKIRED":
                         continue
                     synset_to_senses[synset].add(simple_lemma)
-        if os.path.exists(self.synset_glosses_file):
-            with open(self.synset_glosses_file, "r") as f:
-                for line in f:
-                    parts = line.strip().split("\t")
-                    assert len(parts) == 3
-                    synset, source, definition = parts
-                    if synset not in synset_to_definitions:
-                        synset_to_definitions[synset] = set()
-                    if source == "WIKIRED":
-                        continue
-                    synset_to_definitions[synset].add(definition)
         if os.path.exists(self.synset_metadata_file):
             with open(self.synset_metadata_file, "r") as f:
                 for line in f:
                     parts = line.strip().split("\t")
                     assert len(parts) == 3
-                    synset, keyConcept, synsetType = parts
+                    synset, key_concept, synset_type = parts
                     synset_to_metadata[synset] = {
-                        "keyConcept": keyConcept,
-                        "synsetType": synsetType,
+                        "key_concept": key_concept,
+                        "synset_type": synset_type,
                     }
 
         return (
             synset_to_main_sense,
             synset_to_senses,
-            synset_to_definitions,
             synset_to_metadata,
         )
 
@@ -213,8 +179,8 @@ class BabelNetSpymaster(Spymaster):
         for n_target_words in range(2, 3):
             for potential_target_words in combinations(team_words, n_target_words):
                 clue, score = self.get_clue_for_target_words(
-                    potential_target_words, 
-                    opp_words, 
+                    potential_target_words,
+                    opp_words,
                     bystanders,
                     assassin,
                 )
@@ -225,8 +191,10 @@ class BabelNetSpymaster(Spymaster):
 
         n_target_words = len(target_words)
 
-        if self.configuration.verbose:
+        if self.verbose:
             print(f"Clue: {best_clue}, {n_target_words} ({target_words})")
+
+        self.given_clues.append(best_clue)
 
         return best_clue, n_target_words
 
@@ -239,6 +207,10 @@ class BabelNetSpymaster(Spymaster):
         best_score = float('-inf')
 
         for clue in potential_clues:
+            # Don't give the same clue twice
+            if clue in self.given_clues:
+                continue
+
             # Make sure clue would be valid according to Codenames rules
             if not self.is_valid_clue(clue):
                 continue
@@ -257,8 +229,8 @@ class BabelNetSpymaster(Spymaster):
             """
             opp_word_penalty is a penalty for clues that are similar to opponent words
             """
-            non_team_words = opp_words.union(bystanders).union(set((assassin,)))
-            opp_word_penalty = self.penalize(clue, target_words, non_team_words)
+            non_team_words = opp_words.union(bystanders).union({assassin})
+            opp_word_penalty = self.penalize(clue, non_team_words)
 
             """
             detect_score is a score based on the clue's rarity and its dictionary
@@ -284,14 +256,15 @@ class BabelNetSpymaster(Spymaster):
         of each other.
         """
         for board_word in self.game_words:
-            if clue in board_word or board_word in clue or self.lemmatizer.lemmatize(clue) == self.lemmatizer.lemmatize(board_word) or not clue.isalpha():
+            if clue in board_word or board_word in clue:
+                return False
+            if self.lemmatizer.lemmatize(clue) == self.lemmatizer.lemmatize(board_word) or not clue.isalpha():
                 return False
 
         return True
 
-    def penalize(self, clue, target_words, non_team_words):
+    def penalize(self, clue, non_team_words):
         """
-        :param target_words: potential board words we could apply this clue to
         :param clue: potential clue
         :param non_team_words: all words not belonging to own team
         """
@@ -307,7 +280,8 @@ class BabelNetSpymaster(Spymaster):
 
     def get_detect_score(self, clue, target_words, opp_words):
         """
-        returns: using IDF and dictionary definition heuristics, how much to add to the score for this potential clue give these board words
+        returns: using IDF and dictionary definition heuristics, how much to add to the score
+        for this potential clue give these board words
         """
 
         # The larger the idf is, the more uncommon the word
@@ -367,6 +341,7 @@ class BabelNetSpymaster(Spymaster):
 
     def get_weighted_nns(self, word, filter_entities=True):
         """
+        :param filter_entities: idk yet
         :param word: the codeword to get weighted nearest neighbors for
         returns: a dictionary mapping nearest neighbors (str) to distances from codeword (int)
         """
@@ -378,23 +353,8 @@ class BabelNetSpymaster(Spymaster):
                 return False
             return count_by_relation_group[relationship] < babelnet_relationships_limits[relationship]
 
-        def _single_source_paths_filter(G, firstlevel, paths, cutoff, join):
-            level = 0                  # the current level
-            nextlevel = firstlevel
-            while nextlevel and cutoff > level:
-                thislevel = nextlevel
-                nextlevel = {}
-                for v in thislevel:
-                    for w in G.adj[v]:
-                        if len(paths[v]) >= 3 and G.edges[paths[v][1], paths[v][2]]['relationship'] != G.edges[v, w]['relationship']:
-                            continue
-                        if w not in paths:
-                            paths[w] = join(paths[v], [w])
-                            nextlevel[w] = 1
-                level += 1
-            return paths
-
         def single_source_paths_filter(G, source, cutoff=float('inf')):
+            # Not all synsets have outgoing relations
             if source not in G:
                 raise nx.NodeNotFound("Source {} not in G".format(source))
 
@@ -410,18 +370,36 @@ class BabelNetSpymaster(Spymaster):
             paths = {source: [source]}
             return dict(_single_source_paths_filter(G, nextlevel, paths, cutoff, join))
 
+        def _single_source_paths_filter(G, firstlevel, paths, cutoff, join):
+            level = 0                  # the current level
+            nextlevel = firstlevel
+            while nextlevel and level < cutoff:
+                thislevel = nextlevel
+                nextlevel = {}
+                for v in thislevel:
+                    for w in G.adj[v]:
+                        if len(paths[v]) >= 3 and G.edges[paths[v][1], paths[v][2]]['relationship'] != G.edges[v, w]['relationship']:
+                            continue
+                        if w not in paths:
+                            paths[w] = join(paths[v], [w])
+                            nextlevel[w] = 1
+                level += 1
+            return paths
+
         count_by_relation_group = {relationship: 0 for relationship in babelnet_relationships_limits}
 
         G = nx.DiGraph()
+
+        # Add edges based on relations stored in cached file that are outgoing from all synsets that the word belongs to
         with gzip.open(self.bn_data_dir + word + '.gz', 'r') as f:
             for line in f:
                 (
-                    source, 
-                    target, 
-                    language, 
-                    short_name, 
-                    relation_group, 
-                    is_automatic, 
+                    source,
+                    target,
+                    language,
+                    short_name,
+                    relation_group,
+                    is_automatic,
                     level
                 ) = line.decode('utf-8').strip().split('\t')
 
@@ -431,7 +409,6 @@ class BabelNetSpymaster(Spymaster):
 
         nn_w_dists = {}
         nn_w_synsets = {}
-        dictionary_definitions_for_word = []
         with open(self.bn_data_dir + word + '_synsets', 'r') as f:
             for line in f:
                 synset = line.strip()
@@ -442,14 +419,14 @@ class BabelNetSpymaster(Spymaster):
                     )
                     # NOTE: if we want to filter intermediate nodes, we need to call
                     # get_cached_labels_from_synset_v5 for all nodes in path.
-                    if self.configuration.length_exp_scaling is not None:
-                        scaling_func = lambda x : self.configuration.length_exp_scaling ** x
+                    if self.length_exp_scaling is not None:
+                        scaling_func = lambda x: self.length_exp_scaling ** x
                     else:
-                        scaling_func = lambda x : x
+                        scaling_func = lambda x: x
                     lengths = {neighbor: scaling_func(len(path))
                                for neighbor, path in paths.items()}
                 except nx.NodeNotFound as e:
-                    if self.configuration.verbose:
+                    if self.verbose:
                         print(e)
                     continue
                 for neighbor, length in lengths.items():
@@ -457,13 +434,13 @@ class BabelNetSpymaster(Spymaster):
                         neighbor, get_metadata=filter_entities
                     )
                     # Note: this filters entity clues, not intermediate entity nodes
-                    if filter_entities and neighbor_metadata["synsetType"] != "CONCEPT":
-                        if self.configuration.verbose:
-                            print("skipping non-concept:", neighbor, neighbor_metadata["synsetType"])
+                    if filter_entities and neighbor_metadata["synset_type"] != "CONCEPT":
+                        if self.verbose:
+                            print("skipping non-concept:", neighbor, neighbor_metadata["synset_type"])
                         continue
 
-                    split_multi_word = self.configuration.split_multi_word
-                    if self.configuration.disable_verb_split and synset.endswith(self.VERB_SUFFIX):
+                    split_multi_word = self.split_multi_word
+                    if self.disable_verb_split and synset.endswith(self.VERB_SUFFIX):
                         split_multi_word = False
 
                     single_word_labels = self.get_single_word_labels_v5(
@@ -483,25 +460,16 @@ class BabelNetSpymaster(Spymaster):
                 main_sense, sense, _ = self.get_cached_labels_from_synset_v5(
                     synset)
 
-                # get definitions
-                if synset in self.synset_to_definitions:
-                    dictionary_definitions_for_word.extend(
-                        self.lemmatizer.lemmatize(word.lower().translate(str.maketrans('', '', string.punctuation)))
-                        for definition in self.synset_to_definitions[synset]
-                        for word in definition.split()
-                    )
-
         nn_w_dists = {k: 1.0 / (v + 1) for k, v in nn_w_dists.items() if k != word}
 
         self.weighted_nns[word] = nn_w_dists
-
 
     """
     Babelnet methods
     """
 
     def get_cached_labels_from_synset_v5(self, synset, get_metadata=False):
-        """This actually gets the main_sense but also writes all senses/glosses"""
+        """This actually gets the main_sense but also writes all senses"""
         if (
                 synset not in self.synset_to_main_sense
                 or (get_metadata and synset not in self.synset_to_metadata)
@@ -528,11 +496,11 @@ class BabelNetSpymaster(Spymaster):
         return res.json()
 
     def write_synset_labels_v5(self, synset, json):
-        """Write to synset_main_sense_file, synset_senses_file, and synset_glosses_file"""
+        """Write to synset_main_sense_file and synset_senses_file"""
         if synset not in self.synset_to_main_sense:
             with open(self.synset_main_sense_file, "a") as f:
                 if "mainSense" not in json:
-                    if self.configuration.verbose:
+                    if self.verbose:
                         print("no main sense for", synset)
                     main_sense = synset
                 else:
@@ -558,35 +526,22 @@ class BabelNetSpymaster(Spymaster):
                         if properties["source"] != "WIKIRED":
                             self.synset_to_senses[synset].add(properties["simpleLemma"])
 
-        if synset not in self.synset_to_definitions:
-            self.synset_to_definitions[synset] = set()
-            with open(self.synset_glosses_file, "a") as f:
-                if "glosses" in json:
-                    if len(json["glosses"]) == 0:
-                        f.write("\t".join([synset, "NONE", "NONE"]) + "\n")
-                    else:
-                        for gloss in json["glosses"]:
-                            line = [synset, gloss["source"], gloss["gloss"]]
-                            f.write("\t".join(line) + "\n")
-                            if gloss["source"] != "WIKIRED":
-                                self.synset_to_definitions[synset].add(gloss["gloss"])
-
         if synset not in self.synset_to_metadata:
             with open(self.synset_metadata_file, "a") as f:
-                keyConcept = "NONE"
-                synsetType = "NONE"
-                if "bkeyConcepts" in json:
-                    keyConcept = str(json["bkeyConcepts"])
-                if "synsetType" in json:
-                    synsetType = json["synsetType"]
-                f.write("\t".join([synset, keyConcept, synsetType]) + "\n")
+                key_concept = "NONE"
+                synset_type = "NONE"
+                if "bkey_concepts" in json:
+                    key_concept = str(json["bkey_concepts"])
+                if "synset_type" in json:
+                    synset_type = json["synset_type"]
+                f.write("\t".join([synset, key_concept, synset_type]) + "\n")
                 self.synset_to_metadata[synset] = {
-                    "keyConcept": keyConcept,
-                    "synsetType": synsetType,
+                    "key_concept": key_concept,
+                    "synset_type": synset_type,
                 }
 
     def get_single_word_labels_v5(self, lemma, senses, split_multi_word=False):
-        main_single, main_multi, other_single, other_multi = self.configuration.single_word_label_scores
+        main_single, main_multi, other_single, other_multi = self.single_word_label_scores
         single_word_labels = []
         parsed_lemma, single_word = self.parse_lemma_v5(lemma)
         if single_word:
@@ -622,4 +577,3 @@ class BabelNetFieldOperative(FieldOperative):
     # TODO: Implement
     def make_guess(self, words, clue):
         return 'word'
-
