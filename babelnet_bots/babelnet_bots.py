@@ -1,9 +1,7 @@
 import gzip
 from itertools import combinations
 import os
-import re
 import requests
-import string
 import pickle
 from scipy.spatial import distance
 
@@ -348,6 +346,7 @@ class BabelNetSpymaster(Spymaster):
 
         def should_add_relationship(relationship, level):
             if level > 1 and relationship != 'HYPERNYM':
+                # Only hypernym relationships are followed after the first edge
                 return False
             if relationship not in babelnet_relationships_limits:
                 return False
@@ -371,6 +370,10 @@ class BabelNetSpymaster(Spymaster):
             return dict(_single_source_paths_filter(G, nextlevel, paths, cutoff, join))
 
         def _single_source_paths_filter(G, firstlevel, paths, cutoff, join):
+            """
+            Breadth-first graph search starting from a source synset
+            """
+
             level = 0                  # the current level
             nextlevel = firstlevel
             while nextlevel and level < cutoff:
@@ -378,6 +381,7 @@ class BabelNetSpymaster(Spymaster):
                 nextlevel = {}
                 for v in thislevel:
                     for w in G.adj[v]:
+                        # Check to make sure all edges after the first edge are of the same type
                         if len(paths[v]) >= 3 and G.edges[paths[v][1], paths[v][2]]['relationship'] != G.edges[v, w]['relationship']:
                             continue
                         if w not in paths:
@@ -403,13 +407,14 @@ class BabelNetSpymaster(Spymaster):
                     level
                 ) = line.decode('utf-8').strip().split('\t')
 
+                # Automatically added relationships have been found to be poor
                 if is_automatic == 'False' and should_add_relationship(relation_group, int(level)):
                     G.add_edge(source, target, relationship=short_name)
                     count_by_relation_group[relation_group] += 1
 
         nn_w_dists = {}
-        nn_w_synsets = {}
         with open(self.bn_data_dir + word + '_synsets', 'r') as f:
+            # Search for nearest neighbours starting from every synset the lemma belongs to
             for line in f:
                 synset = line.strip()
                 try:
@@ -417,8 +422,11 @@ class BabelNetSpymaster(Spymaster):
                     paths = single_source_paths_filter(
                         G, source=synset, cutoff=10
                     )
+
                     # NOTE: if we want to filter intermediate nodes, we need to call
                     # get_cached_labels_from_synset_v5 for all nodes in path.
+
+                    # Choose whether to scale neighbour path lengths exponentially or not
                     if self.length_exp_scaling is not None:
                         scaling_func = lambda x: self.length_exp_scaling ** x
                     else:
@@ -429,20 +437,23 @@ class BabelNetSpymaster(Spymaster):
                     if self.verbose:
                         print(e)
                     continue
+
                 for neighbor, length in lengths.items():
                     neighbor_main_sense, neighbor_senses, neighbor_metadata = self.get_cached_labels_from_synset_v5(
                         neighbor, get_metadata=filter_entities
                     )
-                    # Note: this filters entity clues, not intermediate entity nodes
+                    # Note: this filters named entity clues, not intermediate named entity nodes along the path
                     if filter_entities and neighbor_metadata["synset_type"] != "CONCEPT":
                         if self.verbose:
                             print("skipping non-concept:", neighbor, neighbor_metadata["synset_type"])
                         continue
 
+                    # This allows the disable_verb_split setting to override the split_multi_word setting
                     split_multi_word = self.split_multi_word
                     if self.disable_verb_split and synset.endswith(self.VERB_SUFFIX):
                         split_multi_word = False
 
+                    # Get a list of sense lemmas and their scores for the current synset
                     single_word_labels = self.get_single_word_labels_v5(
                         neighbor_main_sense,
                         neighbor_senses,
@@ -451,14 +462,10 @@ class BabelNetSpymaster(Spymaster):
                     for single_word_label, label_score in single_word_labels:
                         if single_word_label not in nn_w_dists:
                             nn_w_dists[single_word_label] = length * label_score
-                            nn_w_synsets[single_word_label] = neighbor
                         else:
+                            # Overwrite distance from source word to neighbour word if shorter path found
                             if nn_w_dists[single_word_label] > (length * label_score):
                                 nn_w_dists[single_word_label] = length * label_score
-                                nn_w_synsets[single_word_label] = neighbor
-
-                main_sense, sense, _ = self.get_cached_labels_from_synset_v5(
-                    synset)
 
         nn_w_dists = {k: 1.0 / (v + 1) for k, v in nn_w_dists.items() if k != word}
 
@@ -544,6 +551,8 @@ class BabelNetSpymaster(Spymaster):
         main_single, main_multi, other_single, other_multi = self.single_word_label_scores
         single_word_labels = []
         parsed_lemma, single_word = self.parse_lemma_v5(lemma)
+
+        # Lemma is skipped if not a single word and split_multi_word is disabled
         if single_word:
             single_word_labels.append((parsed_lemma, main_single))
         elif split_multi_word:
@@ -552,6 +561,7 @@ class BabelNetSpymaster(Spymaster):
             )
 
         for sense in senses:
+            # Lemma is skipped if not a single word and split_multi_word is disabled
             parsed_lemma, single_word = self.parse_lemma_v5(sense)
             if single_word:
                 single_word_labels.append((parsed_lemma, other_single))
@@ -559,10 +569,14 @@ class BabelNetSpymaster(Spymaster):
                 single_word_labels.extend(
                     zip(parsed_lemma.split("_"), [other_multi for _ in parsed_lemma.split("_")])
                 )
+
         if len(single_word_labels) == 0:
             # can only happen if split_multi_word = False
             assert not split_multi_word
+
+            # Override split_multi_word and return the first part of the main sense
             return [(lemma.split("#")[0], 1)]
+
         return single_word_labels
 
     def parse_lemma_v5(self, lemma):
