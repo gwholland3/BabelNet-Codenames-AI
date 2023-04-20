@@ -10,7 +10,7 @@ import queue
 from gensim.corpora import Dictionary
 import gensim.downloader as api
 
-from codenames_bots import Spymaster, FieldOperative
+#from codenames_bots import Spymaster, FieldOperative
 
 from nltk.stem import WordNetLemmatizer
 
@@ -47,7 +47,7 @@ idf_lower_bound = 0.0006
 FREQ_WEIGHT = 2
 DICT2VEC_WEIGHT = 2
 
-class BabelNetSpymaster(Spymaster):
+class BabelNetSpymaster:
 
     # Constants
     VERB_SUFFIX = 'v'
@@ -649,7 +649,7 @@ class BabelNetSpymaster(Spymaster):
         return parts[0], single_word
 
 
-class BabelNetFieldOperative(FieldOperative):
+class BabelNetFieldOperative:
 
     # TODO: Implement
     def make_guess(self, words, clue):
