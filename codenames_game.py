@@ -3,7 +3,7 @@ import random
 from babelnet_bots.babelnet_bots import BabelNetSpymaster, BabelNetFieldOperative
 
 
-WORDLIST_FILEPATH = 'data/wordlists/test_words.txt'
+WORDLIST_FILEPATH = 'wordlists/test_words.txt'
 
 
 def main():

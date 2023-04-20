@@ -13,7 +13,7 @@ Run your favorite version of the git clone command on this repo. I prefer:
 `git clone git@github.com:gwholland3/BabelNet-Codenames-AI.git`
 
 ### 2. Download Required Data
-Download the [required data](https://drive.google.com/file/d/1F70CtbsoPPPDnV-ZAUq0i0Rrvtv6taoV/view?usp=sharing) that was too large to store on GitHub. The file should be called `CodenamesData.zip`. Once the file is downloaded, unzip it. Inside the `CodenamesData` folder, there are two items of interest. Move the `babelnet_v6` folder and the `word_to_dict2vec_embeddings` file into the `data/` folder that's in your local copy of the repo. Feel free to delete the rest of the downloaded data, as it is not used.
+Download the [required data](https://drive.google.com/file/d/1F70CtbsoPPPDnV-ZAUq0i0Rrvtv6taoV/view?usp=sharing) that was too large to store on GitHub. The file should be called `CodenamesData.zip`. Once the file is downloaded, unzip it. Inside the `CodenamesData` folder, there are two items of interest. Move the `babelnet_v6` folder and the `word_to_dict2vec_embeddings` file into the `babelnet_bots/data/` folder that's in your local copy of the repo. Then rename the `babelnet_v6/` folder to `old_cached_babelnet_data/`. Feel free to delete the rest of the downloaded data, as it is not used.
 
 ### 3. Install Python
 This code was developed and run on Python `3.10.10`, but most likely any version of Python `3.10` will do. Make sure you have an appropriate version installed locally.

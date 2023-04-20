@@ -4,6 +4,7 @@ import os
 import requests
 import pickle
 from scipy.spatial import distance
+import queue
 
 # Gensim
 from gensim.corpora import Dictionary
@@ -15,6 +16,8 @@ from nltk.stem import WordNetLemmatizer
 
 # Graphing
 import networkx as nx
+
+from babelnet_bots.babelnet_data import retrieve_bn_subgraph
 
 
 babelnet_relationships_limits = {
@@ -44,18 +47,15 @@ idf_lower_bound = 0.0006
 FREQ_WEIGHT = 2
 DICT2VEC_WEIGHT = 2
 
-API_KEY_FILEPATH = 'babelnet_bots/bn_api_key.txt'
-
-
 class BabelNetSpymaster(Spymaster):
 
     # Constants
-    VERB_SUFFIX = "v"
-    NOUN_SUFFIX = "n"
-    ADJ_SUFFIX = "a"
+    VERB_SUFFIX = 'v'
+    NOUN_SUFFIX = 'n'
+    ADJ_SUFFIX = 'a'
 
     # File paths to cached babelnet query results
-    bn_data_dir = 'data/babelnet_v6/'
+    bn_data_dir = 'babelnet_bots/data/old_cached_babelnet_data/'
     synset_main_sense_file = bn_data_dir + 'synset_to_main_sense.txt'
     synset_senses_file = bn_data_dir + 'synset_to_senses.txt'
     synset_metadata_file = bn_data_dir + 'synset_to_metadata.txt'
@@ -66,11 +66,19 @@ class BabelNetSpymaster(Spymaster):
     length_exp_scaling = None
     single_word_label_scores = (1, 1.1, 1.1, 1.2)
 
+    unguessed_words = None
+    weighted_nns = {}
     given_clues = []
 
-    def __init__(self, game_words):
-        with open(API_KEY_FILEPATH) as f:
-            self.api_key = f.read()
+    def __init__(self, *args):
+        unguessed_words = None
+        if len(args) == 1:
+            unguessed_words = args[0]
+
+        """
+        print(unguessed_words[0])
+        self.get_similar_words(unguessed_words[0])
+        """
 
         (
             self.synset_to_main_sense,
@@ -78,7 +86,7 @@ class BabelNetSpymaster(Spymaster):
             self.synset_to_metadata,
         ) = self._load_synset_data_v5()
 
-        with open('data/word_to_dict2vec_embeddings', 'rb') as f:
+        with open('babelnet_bots/data/word_to_dict2vec_embeddings', 'rb') as f:
             self.dict2vec_embeddings = pickle.load(f)
 
         # Dictionary of word to document frequency
@@ -87,16 +95,47 @@ class BabelNetSpymaster(Spymaster):
         # Used to get word lemmas
         self.lemmatizer = WordNetLemmatizer()
 
-        self.game_words = game_words
-        self.weighted_nns = dict()
-        for word in self.game_words:
-            self.get_weighted_nns(word)
+        if unguessed_words is not None:
+            self.unguessed_words = unguessed_words
+            for word in self.unguessed_words:
+                self.get_weighted_nns(word, filter_entities=False)
 
-        if self.verbose:
-            print("NEAREST NEIGHBORS:")
-            for word, clues in self.weighted_nns.items():
-                print(word)
-                print(sorted(clues, key=lambda k: clues[k], reverse=True)[:5])
+            if self.verbose:
+                print("NEAREST NEIGHBORS:")
+                for word, clues in self.weighted_nns.items():
+                    print(word)
+                    print(sorted(clues, key=lambda k: clues[k], reverse=True)[:5])
+
+    def set_game_state(self, words_on_board, key_grid):
+        if self.unguessed_words is None:
+            for word in words_on_board:
+                self.get_weighted_nns(word, filter_entities=False)
+
+            if self.verbose:
+                print("NEAREST NEIGHBORS:")
+                for word, clues in self.weighted_nns.items():
+                    print(word)
+                    print(sorted(clues, key=lambda k: clues[k], reverse=True)[:5])
+
+        self.unguessed_words = []
+        self.team_words = set()
+        self.opp_words = set()
+        self.bystanders = set()
+        for word, key in zip(words_on_board, key_grid):
+            if word[0] == '*':
+                continue
+            self.unguessed_words.append(word)
+            if key == '*Red*':
+                self.team_words.add(word)
+            elif key == '*Blue*':
+                self.opp_words.add(word)
+            elif key == '*Civilian*':
+                self.bystanders.add(word)
+            else:
+                self.assassin = word
+
+    def get_clue(self):
+        return self.give_clue(self.team_words, self.opp_words, self.bystanders, self.assassin)
 
     """
     Pre-process steps
@@ -144,10 +183,10 @@ class BabelNetSpymaster(Spymaster):
         """
         Sets up a dictionary from words to their document frequency
         """
-        if (os.path.exists("data/word_to_df.pkl")) and (os.path.exists("data/text8_num_documents.txt")):
-            with open('data/word_to_df.pkl', 'rb') as f:
+        if (os.path.exists("babelnet_bots/data/word_to_df.pkl")) and (os.path.exists("babelnet_bots/data/text8_num_documents.txt")):
+            with open('babelnet_bots/data/word_to_df.pkl', 'rb') as f:
                 word_to_df = pickle.load(f)
-            with open('data/text8_num_documents.txt', 'rb') as f:
+            with open('babelnet_bots/data/text8_num_documents.txt', 'rb') as f:
                 for line in f:
                     num_docs = int(line.strip())
                     break
@@ -158,9 +197,9 @@ class BabelNetSpymaster(Spymaster):
             num_docs = dct.num_docs
             word_to_df = {dct[id]: id_to_doc_freqs[id]
                           for id in id_to_doc_freqs}
-            with open('data/text8_num_documents.txt', 'w') as f:
+            with open('babelnet_bots/data/text8_num_documents.txt', 'w') as f:
                 f.write(str(num_docs))
-            with open('data/word_to_df.pkl', 'wb') as f:
+            with open('babelnet_bots/data/word_to_df.pkl', 'wb') as f:
                 pickle.dump(word_to_df, f)
 
         return num_docs, word_to_df
@@ -174,7 +213,7 @@ class BabelNetSpymaster(Spymaster):
         best_score = float('-inf')
 
         # Check all combinations of target words
-        for n_target_words in range(2, 3):
+        for n_target_words in range(min(2, len(team_words)), 3):
             for potential_target_words in combinations(team_words, n_target_words):
                 clue, score = self.get_clue_for_target_words(
                     potential_target_words,
@@ -253,7 +292,7 @@ class BabelNetSpymaster(Spymaster):
         either the clue or an unguessed board word be a substring
         of each other.
         """
-        for board_word in self.game_words:
+        for board_word in self.unguessed_words:
             if clue in board_word or board_word in clue:
                 return False
             if self.lemmatizer.lemmatize(clue) == self.lemmatizer.lemmatize(board_word) or not clue.isalpha():
@@ -336,6 +375,30 @@ class BabelNetSpymaster(Spymaster):
         cosine_similarity = 1 - cosine_distance
 
         return cosine_similarity
+
+
+    def get_similar_words(self, word):
+        G = retrieve_bn_subgraph(word)
+        print(nx.readwrite.json_graph.node_link_data(G))
+
+        """
+        word_synsets = G.graph['source_synsets']
+        similar_words = {}
+        visited_synsets = set(word_synsets)
+        synset_queue = queue.Queue()
+        for synset in word_synsets:
+            G.nodes[synset]['dist'] = 0
+            G.nodes[synset]['prev_relation'] = 'source'
+            synset_queue.put(synset)
+
+        while not synset_queue.empty():
+            cur = synset_queue.get()
+            for sense in G.nodes[cur]['senses']:
+                if sense not in similar_words:
+                    similar_words[sense] = G.nodes[cur]['dist']
+            for relation in G.adj[cur]:
+                pass
+        """
 
     def get_weighted_nns(self, word, filter_entities=True):
         """
@@ -424,7 +487,7 @@ class BabelNetSpymaster(Spymaster):
                     )
 
                     # NOTE: if we want to filter intermediate nodes, we need to call
-                    # get_cached_labels_from_synset_v5 for all nodes in path.
+                    # get_cached_labels_from_synset_v5 and analyze the results for all nodes in path.
 
                     # Choose whether to scale neighbour path lengths exponentially or not
                     if self.length_exp_scaling is not None:
