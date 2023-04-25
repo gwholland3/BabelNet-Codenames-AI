@@ -17,6 +17,7 @@ from nltk.stem import WordNetLemmatizer
 # Graphing
 import networkx as nx
 
+from . import package_fp
 from .babelnet_data import retrieve_bn_subgraph
 
 
@@ -46,8 +47,6 @@ stopwords = [
 idf_lower_bound = 0.0006
 FREQ_WEIGHT = 2
 DICT2VEC_WEIGHT = 2
-
-package_fp = os.path.dirname(__file__)
 
 class BabelNetSpymaster:
 

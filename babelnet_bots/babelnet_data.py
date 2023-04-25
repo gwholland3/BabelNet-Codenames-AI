@@ -5,12 +5,14 @@ import requests
 import json as jsonlib
 import networkx as nx
 
+from . import package_fp
 
-CACHED_BN_SUBGRAPHS_DIR = 'babelnet_bots/data/cached_babelnet_subgraphs'
-CACHED_LEMMA_SYNSETS_DIR = 'babelnet_bots/data/cached_lemma_synsets'
-CACHED_SYNSET_INFO_DIR = 'babelnet_bots/data/cached_synset_info'
-CACHED_OUTGOING_EDGES_DIR = 'babelnet_bots/data/cached_outgoing_edges'
-API_KEY_FILEPATH = 'babelnet_bots/bn_api_key.txt'
+
+CACHED_BN_SUBGRAPHS_DIR = f'{package_fp}/data/cached_babelnet_subgraphs'
+CACHED_LEMMA_SYNSETS_DIR = f'{package_fp}/data/cached_lemma_synsets'
+CACHED_SYNSET_INFO_DIR = f'{package_fp}/data/cached_synset_info'
+CACHED_OUTGOING_EDGES_DIR = f'{package_fp}/data/cached_outgoing_edges'
+API_KEY_FILEPATH = f'{package_fp}/bn_api_key.txt'
 
 BN_DOMAIN = 'babelnet.io'
 BN_VERSION = 'v8'
