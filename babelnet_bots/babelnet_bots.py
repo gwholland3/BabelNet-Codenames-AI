@@ -108,6 +108,8 @@ class BabelNetSpymaster:
                     print(sorted(clues, key=lambda k: clues[k], reverse=True)[:5])
 
     def set_game_state(self, words_on_board, key_grid):
+        words_on_board = [word.lower() for word in words_on_board]
+
         if self.unguessed_words is None:
             for word in words_on_board:
                 self.get_weighted_nns(word, filter_entities=False)
