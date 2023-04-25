@@ -128,11 +128,11 @@ class BabelNetSpymaster:
             if word[0] == '*':
                 continue
             self.unguessed_words.append(word)
-            if key == '*Red*':
+            if key == 'Red':
                 self.team_words.add(word)
-            elif key == '*Blue*':
+            elif key == 'Blue':
                 self.opp_words.add(word)
-            elif key == '*Civilian*':
+            elif key == 'Civilian':
                 self.bystanders.add(word)
             else:
                 self.assassin = word
