@@ -17,7 +17,7 @@ from nltk.stem import WordNetLemmatizer
 # Graphing
 import networkx as nx
 
-from babelnet_bots.babelnet_data import retrieve_bn_subgraph
+from .babelnet_data import retrieve_bn_subgraph
 
 
 babelnet_relationships_limits = {
@@ -47,6 +47,8 @@ idf_lower_bound = 0.0006
 FREQ_WEIGHT = 2
 DICT2VEC_WEIGHT = 2
 
+package_fp = os.path.dirname(__file__)
+
 class BabelNetSpymaster:
 
     # Constants
@@ -55,7 +57,7 @@ class BabelNetSpymaster:
     ADJ_SUFFIX = 'a'
 
     # File paths to cached babelnet query results
-    bn_data_dir = 'babelnet_bots/data/old_cached_babelnet_data/'
+    bn_data_dir = f'{package_fp}/data/old_cached_babelnet_data/'
     synset_main_sense_file = bn_data_dir + 'synset_to_main_sense.txt'
     synset_senses_file = bn_data_dir + 'synset_to_senses.txt'
     synset_metadata_file = bn_data_dir + 'synset_to_metadata.txt'
@@ -86,7 +88,7 @@ class BabelNetSpymaster:
             self.synset_to_metadata,
         ) = self._load_synset_data_v5()
 
-        with open('babelnet_bots/data/word_to_dict2vec_embeddings', 'rb') as f:
+        with open(f'{package_fp}/data/word_to_dict2vec_embeddings', 'rb') as f:
             self.dict2vec_embeddings = pickle.load(f)
 
         # Dictionary of word to document frequency
@@ -183,10 +185,10 @@ class BabelNetSpymaster:
         """
         Sets up a dictionary from words to their document frequency
         """
-        if (os.path.exists("babelnet_bots/data/word_to_df.pkl")) and (os.path.exists("babelnet_bots/data/text8_num_documents.txt")):
-            with open('babelnet_bots/data/word_to_df.pkl', 'rb') as f:
+        if (os.path.exists(f'{package_fp}/data/word_to_df.pkl')) and (os.path.exists(f'{package_fp}/data/text8_num_documents.txt')):
+            with open(f'{package_fp}/data/word_to_df.pkl', 'rb') as f:
                 word_to_df = pickle.load(f)
-            with open('babelnet_bots/data/text8_num_documents.txt', 'rb') as f:
+            with open(f'{package_fp}/data/text8_num_documents.txt', 'rb') as f:
                 for line in f:
                     num_docs = int(line.strip())
                     break
@@ -197,9 +199,9 @@ class BabelNetSpymaster:
             num_docs = dct.num_docs
             word_to_df = {dct[id]: id_to_doc_freqs[id]
                           for id in id_to_doc_freqs}
-            with open('babelnet_bots/data/text8_num_documents.txt', 'w') as f:
+            with open(f'{package_fp}/data/text8_num_documents.txt', 'w') as f:
                 f.write(str(num_docs))
-            with open('babelnet_bots/data/word_to_df.pkl', 'wb') as f:
+            with open(f'{package_fp}/data/word_to_df.pkl', 'wb') as f:
                 pickle.dump(word_to_df, f)
 
         return num_docs, word_to_df
