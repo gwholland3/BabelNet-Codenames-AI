@@ -1,4 +1,5 @@
 import gzip
+from collections import defaultdict
 from itertools import combinations
 import os
 import requests
@@ -47,6 +48,7 @@ stopwords = [
 idf_lower_bound = 0.0006
 FREQ_WEIGHT = 2
 DICT2VEC_WEIGHT = 2
+
 
 class BabelNetSpymaster:
 
@@ -112,6 +114,7 @@ class BabelNetSpymaster:
 
         if self.unguessed_words is None:
             for word in words_on_board:
+                # TODO: replace with get_similar_words()
                 self.get_weighted_nns(word, filter_entities=False)
 
             if self.verbose:
@@ -379,16 +382,24 @@ class BabelNetSpymaster:
 
         return cosine_similarity
 
-
     def get_similar_words(self, word):
         G = retrieve_bn_subgraph(word)
         print(nx.readwrite.json_graph.node_link_data(G))
 
         """
+        Perform a breadth-first search on G, which should already
+        be cut off at a maximum depth
+        """
+
         word_synsets = G.graph['source_synsets']
-        similar_words = {}
+        similar_words = defaultdict(lambda: float('inf'))
         visited_synsets = set(word_synsets)
         synset_queue = queue.Queue()
+
+        """
+        Each synset that the lemma belongs to is given a distance of 0 
+        and has no previous relation (represented by "source")
+        """
         for synset in word_synsets:
             G.nodes[synset]['dist'] = 0
             G.nodes[synset]['prev_relation'] = 'source'
@@ -396,12 +407,14 @@ class BabelNetSpymaster:
 
         while not synset_queue.empty():
             cur = synset_queue.get()
-            for sense in G.nodes[cur]['senses']:
-                if sense not in similar_words:
-                    similar_words[sense] = G.nodes[cur]['dist']
+            for lemma in G.nodes[cur]['senses']:
+                # Update similar_words dict if better path found
+                if G.nodes[cur]['dist'] < similar_words[lemma]:
+                    similar_words[lemma] = G.nodes[cur]['dist']
             for relation in G.adj[cur]:
-                pass
-        """
+                synset_queue.put(relation)
+
+        return similar_words
 
     def get_weighted_nns(self, word, filter_entities=True):
         """
@@ -533,9 +546,9 @@ class BabelNetSpymaster:
                             if nn_w_dists[single_word_label] > (length * label_score):
                                 nn_w_dists[single_word_label] = length * label_score
 
-        nn_w_dists = {k: 1.0 / (v + 1) for k, v in nn_w_dists.items() if k != word}
+        nn_w_similarities = {k: 1.0 / (v + 1) for k, v in nn_w_dists.items() if k != word}
 
-        self.weighted_nns[word] = nn_w_dists
+        self.weighted_nns[word] = nn_w_similarities 
 
     """
     Babelnet methods
