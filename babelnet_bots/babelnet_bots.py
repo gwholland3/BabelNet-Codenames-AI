@@ -78,10 +78,9 @@ class BabelNetSpymaster:
         if len(args) == 1:
             unguessed_words = args[0]
 
-        """
-        print(unguessed_words[0])
-        self.get_similar_words(unguessed_words[0])
-        """
+            for word in unguessed_words:
+                print(word)
+                self.get_similar_words(word)
 
         (
             self.synset_to_main_sense,
@@ -384,26 +383,29 @@ class BabelNetSpymaster:
 
     def get_similar_words(self, word):
         G = retrieve_bn_subgraph(word)
-        print(nx.readwrite.json_graph.node_link_data(G))
+        #print(nx.node_link_data(G))
 
         """
         Perform a breadth-first search on G, which should already
         be cut off at a maximum depth
         """
 
-        word_synsets = G.graph['source_synsets']
+        """
+        word_synset_ids = G.graph['source_synset_ids']
         similar_words = defaultdict(lambda: float('inf'))
-        visited_synsets = set(word_synsets)
+        visited_synset_ids = set(word_synset_ids)
         synset_queue = queue.Queue()
+        """
 
         """
         Each synset that the lemma belongs to is given a distance of 0 
         and has no previous relation (represented by "source")
         """
-        for synset in word_synsets:
-            G.nodes[synset]['dist'] = 0
-            G.nodes[synset]['prev_relation'] = 'source'
-            synset_queue.put(synset)
+        """
+        for synset_id in word_synset_ids:
+            G.nodes[synset_id]['dist'] = 0
+            G.nodes[synset_id]['prev_relation'] = 'source'
+            synset_queue.put(synset_id)
 
         while not synset_queue.empty():
             cur = synset_queue.get()
@@ -415,6 +417,7 @@ class BabelNetSpymaster:
                 synset_queue.put(relation)
 
         return similar_words
+        """
 
     def get_weighted_nns(self, word, filter_entities=True):
         """

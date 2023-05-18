@@ -2,6 +2,7 @@ import os
 import queue
 import requests
 
+import gzip
 import json as jsonlib
 import networkx as nx
 
@@ -23,27 +24,205 @@ OUTGOING_EDGES_URL = f'https://{BN_DOMAIN}/{BN_VERSION}/getOutgoingEdges'
 REQUIRED_BN_HEADERS = {'Accept-Encoding': 'gzip'}
 LANG = 'EN'
 
+SRC_SYNSET = True
+NOT_SRC_SYNSET = False
+
+
+offline = True
+if offline:
+    import babelnet as bn
+    from babelnet import Language, BabelSynsetID
+    from babelnet.synset import SynsetType
+    from babelnet.data.relation import BabelPointer
+
+    HYPERNYM_RELATIONSHIP_TYPES = [
+        BabelPointer.ANY_HYPERNYM,
+        BabelPointer.HYPERNYM,
+        BabelPointer.HYPERNYM_INSTANCE,
+        BabelPointer.WIBI_HYPERNYM,
+        BabelPointer.WIKIDATA_HYPERNYM
+    ]
+    HYPO_AND_HYPERNYM_RELATIONSHIP_TYPES = HYPERNYM_RELATIONSHIP_TYPES + [
+        BabelPointer.ANY_HYPONYM,
+        BabelPointer.HYPONYM,
+        BabelPointer.HYPONYM_INSTANCE,
+        BabelPointer.WIBI_HYPONYM,
+        BabelPointer.WIKIDATA_HYPONYM,
+        BabelPointer.WIKIDATA_HYPONYM_INSTANCE
+    ]
+
 
 with open(API_KEY_FILEPATH) as f:
     api_key = f.read().strip()
 
 
 def retrieve_bn_subgraph(word):
-    cached_bn_subgraph_filename = f'{CACHED_BN_SUBGRAPHS_DIR}/{word}'
+    cached_bn_subgraph_filename = f'{CACHED_BN_SUBGRAPHS_DIR}/{word}.gz'
 
     if not os.path.exists(cached_bn_subgraph_filename):
-        G = construct_bn_subgraph(word)
-        with open(cached_bn_subgraph_filename, 'w') as f:
-            f.write(G)
+        G = construct_bn_subgraph_offline(word)
+        with gzip.open(cached_bn_subgraph_filename, 'wt', encoding='UTF-8') as zipfile:
+            jsonlib.dump(nx.node_link_data(G), zipfile)
 
     else:
-        with open(cached_bn_subgraph_filename) as f:
-            G = f.read()
+        with gzip.open(cached_bn_subgraph_filename, 'rt', encoding='UTF-8') as zipfile:
+            G = nx.node_link_graph(jsonlib.load(zipfile))
 
     return G
 
 
-def construct_bn_subgraph(word, max_path_len=10):
+def construct_bn_subgraph_offline(word, max_path_len=10):
+    G = nx.DiGraph(source_synset_ids=[])
+    synset_queue = queue.SimpleQueue()
+    visited_synsets = set()
+    skipped_synsets = set()
+    outgoing_edges = dict()
+
+    # Initialize queue with just the source synsets containing the word
+    word_synsets = bn.get_synsets(word, from_langs=[Language.EN])
+    for word_synset in word_synsets:
+        word_synset_id = str(word_synset.id)
+        synset_info, synset_outgoing_edges = get_synset_info_offline(word_synset, SRC_SYNSET)
+        G.graph['source_synset_ids'].append(word_synset_id)
+        G.add_node(word_synset_id, **synset_info)
+        outgoing_edges[word_synset_id] = synset_outgoing_edges
+        synset_queue.put(word_synset_id)
+        visited_synsets.add(word_synset_id)
+
+    for path_len in range(max_path_len):
+        print("Level: " + str(path_len+1))
+        next_level_synset_queue = queue.SimpleQueue()
+        while not synset_queue.empty():
+            synset_id = synset_queue.get()
+            synset_outgoing_edges = outgoing_edges[synset_id]
+            print(f"Expanding from synset with {len(synset_outgoing_edges)} edges: " + synset_id)
+            for edge_info, target_synset_id in synset_outgoing_edges:
+                if target_synset_id in skipped_synsets:
+                    continue
+                if target_synset_id not in visited_synsets:
+                    target_synset = bn.get_synset(BabelSynsetID(target_synset_id))
+                    target_synset_info, target_synset_outgoing_edges = get_synset_info_offline(target_synset, NOT_SRC_SYNSET)
+                    if target_synset_info:
+                        G.add_node(target_synset_id, **target_synset_info)
+                        outgoing_edges[target_synset_id] = target_synset_outgoing_edges
+                        next_level_synset_queue.put(target_synset_id)
+                        visited_synsets.add(target_synset_id)
+                    else:
+                        skipped_synsets.add(target_synset_id)
+                        continue
+                G.add_edge(synset_id, target_synset_id, **edge_info)
+        synset_queue = next_level_synset_queue
+
+    return G
+
+
+def get_synset_info_offline(synset, is_src_synset):
+    senses = [get_sense_info(sense) for sense in synset.senses(language=Language.EN)]
+
+    # Check if synset has any English senses
+    if len(senses) == 0:
+        #print(f"Synset {synset.id} does not contain an English word sense... skipping")
+        return None, None
+
+    # Check to make sure synset is a concept (as opposed to a named entity or unknown)
+    # Source synsets are allowed to be non-concepts
+    if not is_src_synset and synset.type != SynsetType.CONCEPT:
+        #print(f"Synset {synset.id} is not a concept... skipping")
+        return None, None
+
+    synset_info = {
+        'pos': str(synset.pos),
+        'type': str(synset.type),
+        'domains': {str(domain): val for domain, val in synset.domains.items()},
+        'isKeyConcept': synset.is_key_concept,
+        'senses': senses,
+        'mainSense': get_sense_info(synset.main_sense(language=Language.EN)),
+        'glosses': [get_gloss_info(gloss) for gloss in synset.glosses(language=Language.EN)],
+        'mainGloss': get_gloss_info(synset.main_gloss(language=Language.EN)),
+        'examples': [get_example_info(example) for example in synset.examples(language=Language.EN)],
+        'mainExample': get_example_info(synset.main_example(language=Language.EN))
+    }
+    all_synset_outgoing_edges = synset.outgoing_edges() if is_src_synset else synset.outgoing_edges(*HYPERNYM_RELATIONSHIP_TYPES)
+    synset_outgoing_edges = [get_edge_info(edge) for edge in all_synset_outgoing_edges if should_follow_edge(edge, is_src_synset)]
+
+    return synset_info, synset_outgoing_edges
+
+
+def get_sense_info(sense):
+    sense_info = {
+        'fullLemma': sense.full_lemma,
+        'normalizedLemma': sense.normalized_lemma,
+        'source': str(sense.source),
+        'isKeySense': sense.is_key_sense,
+        'lemma': sense.lemma.lemma,
+        'lemmaType': str(sense.lemma.lemma_type),
+        'isAutomatic': sense.is_automatic_translation
+    }
+
+    return sense_info
+
+
+def get_gloss_info(gloss):
+    if gloss is None:
+        return None
+
+    gloss_info = {
+        'gloss': gloss.gloss,
+        'source': str(gloss.source)
+    }
+
+    return gloss_info
+
+
+def get_example_info(example):
+    if example is None:
+        return None
+
+    example_info = {
+        'example': example.example,
+        'source': str(example.source)
+    }
+
+    return example_info
+
+
+def get_edge_info(edge):
+    edge_info = {
+        'name': edge.pointer.relation_name,
+        'shortName': edge.pointer.short_name,
+        'relationGroup': str(edge.pointer.relation_group)
+    }
+
+    return edge_info, edge.target
+
+
+def should_follow_edge(edge, is_src_synset):
+    if edge.language not in (Language.EN, Language.MUL):
+        return False
+
+    pointer = edge.pointer
+
+    # Automatic edges tend to be bad quality
+    if pointer.is_automatic:
+        return False
+
+    return True
+    # Allow all edge types from source synsets
+    if is_src_synset:
+        return True
+
+    # Be more restrictive on secondary edges and beyond
+    return pointer.is_hypernym or pointer.is_hyponymy
+
+
+"""
+WARNING: 
+
+THE BELOW CODE FOR ONLINE API SCRAPING IS NOT AS ROBUST
+AS THE ABOVE CODE FOR OFFLINE LOCAL INDEX SCRAPING
+"""
+
+def construct_bn_subgraph_online(word, max_path_len=10):
     G = nx.DiGraph()
     synset_queue = queue.SimpleQueue()
 
