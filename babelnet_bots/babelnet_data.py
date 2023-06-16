@@ -28,7 +28,7 @@ SRC_SYNSET = True
 NOT_SRC_SYNSET = False
 
 
-offline = True
+offline = False
 if offline:
     import babelnet as bn
     from babelnet import Language, BabelSynsetID
@@ -143,7 +143,7 @@ def get_synset_info_offline(synset, is_src_synset):
         'mainExample': get_example_info(synset.main_example(language=Language.EN))
     }
     all_synset_outgoing_edges = synset.outgoing_edges() if is_src_synset else synset.outgoing_edges(*HYPERNYM_RELATIONSHIP_TYPES)
-    synset_outgoing_edges = [get_edge_info(edge) for edge in all_synset_outgoing_edges if should_follow_edge(edge, is_src_synset)]
+    synset_outgoing_edges = [get_edge_info(edge) for edge in all_synset_outgoing_edges if should_follow_edge(edge)]
 
     return synset_info, synset_outgoing_edges
 
@@ -196,7 +196,7 @@ def get_edge_info(edge):
     return edge_info, edge.target
 
 
-def should_follow_edge(edge, is_src_synset):
+def should_follow_edge(edge):
     if edge.language not in (Language.EN, Language.MUL):
         return False
 
@@ -207,12 +207,6 @@ def should_follow_edge(edge, is_src_synset):
         return False
 
     return True
-    # Allow all edge types from source synsets
-    if is_src_synset:
-        return True
-
-    # Be more restrictive on secondary edges and beyond
-    return pointer.is_hypernym or pointer.is_hyponymy
 
 
 """

@@ -6,6 +6,7 @@ import requests
 import pickle
 from scipy.spatial import distance
 import queue
+import numpy as np
 
 # Gensim
 from gensim.corpora import Dictionary
@@ -47,7 +48,22 @@ stopwords = [
 
 idf_lower_bound = 0.0006
 FREQ_WEIGHT = 2
-DICT2VEC_WEIGHT = 2
+DICT2VEC_WEIGHT = 3
+
+
+def get_similarity(embedding1, embedding2):
+    """
+    :param embedding1: a dict2vec word embedding
+    :param embedding2: another dict2vec word embedding
+    returns: the cosine similarity of the two input embedding vectors
+    """
+
+    cosine_distance = distance.cosine(embedding1, embedding2)
+
+    # Convert from cosine distance to cosine similarity
+    cosine_similarity = 1 - cosine_distance
+
+    return cosine_similarity
 
 
 class BabelNetSpymaster:
@@ -71,16 +87,13 @@ class BabelNetSpymaster:
 
     unguessed_words = None
     weighted_nns = {}
+    paths_to_nn = {}
     given_clues = []
 
     def __init__(self, *args):
         unguessed_words = None
         if len(args) == 1:
             unguessed_words = args[0]
-
-            for word in unguessed_words:
-                print(word)
-                self.get_similar_words(word)
 
         (
             self.synset_to_main_sense,
@@ -98,9 +111,12 @@ class BabelNetSpymaster:
         self.lemmatizer = WordNetLemmatizer()
 
         if unguessed_words is not None:
+            # Initial board state was passed in on initialization, so we need to preprocess it
+
             self.unguessed_words = unguessed_words
             for word in self.unguessed_words:
-                self.get_weighted_nns(word, filter_entities=False)
+                self.weighted_nns[word], self.paths_to_nn[word] = self.get_similar_words(word)
+                # self.get_weighted_nns(word, filter_entities=False)
 
             if self.verbose:
                 print("NEAREST NEIGHBORS:")
@@ -108,13 +124,22 @@ class BabelNetSpymaster:
                     print(word)
                     print(sorted(clues, key=lambda k: clues[k], reverse=True)[:5])
 
+    """
+    The below two methods meet the interface expected by the evaluation framework
+    """
+
     def set_game_state(self, words_on_board, key_grid):
         words_on_board = [word.lower() for word in words_on_board]
 
         if self.unguessed_words is None:
+            """
+            If this is the first time we are receiving a board state, it must be
+            the initial board state and we need to preprocess it
+            """
+
             for word in words_on_board:
-                # TODO: replace with get_similar_words()
-                self.get_weighted_nns(word, filter_entities=False)
+                self.weighted_nns[word], self.paths_to_nn[word] = self.get_similar_words(word)
+                # self.get_weighted_nns(word, filter_entities=False)
 
             if self.verbose:
                 print("NEAREST NEIGHBORS:")
@@ -128,6 +153,7 @@ class BabelNetSpymaster:
         self.bystanders = set()
         for word, key in zip(words_on_board, key_grid):
             if word[0] == '*':
+                # This is an already-guessed word
                 continue
             self.unguessed_words.append(word)
             if key == 'Red':
@@ -146,6 +172,7 @@ class BabelNetSpymaster:
     Pre-process steps
     """
 
+    # Loads the old cached data
     def _load_synset_data_v5(self):
         """Load synset_to_main_sense"""
         synset_to_main_sense = {}
@@ -208,17 +235,24 @@ class BabelNetSpymaster:
                 pickle.dump(word_to_df, f)
 
         return num_docs, word_to_df
-
+    word = 0
     def give_clue(self, team_words, opp_words, bystanders, assassin):
         """
         Required Codenames method
         """
 
+        MIN_NUM_TARGET_WORDS = 2
+        MAX_NUM_TARGET_WORDS = 3
+
         # Keep track of the best-looking clue across all possibilities
+        best_clue = "clue"  # If the bot ever returns "clue", there is probably a bug
         best_score = float('-inf')
+        target_words = {}
 
         # Check all combinations of target words
-        for n_target_words in range(min(2, len(team_words)), 3):
+        for n_target_words in range(min(MIN_NUM_TARGET_WORDS, len(team_words)),
+                                    min(MAX_NUM_TARGET_WORDS, len(team_words)) + 1):
+
             for potential_target_words in combinations(team_words, n_target_words):
                 clue, score = self.get_clue_for_target_words(
                     potential_target_words,
@@ -233,40 +267,45 @@ class BabelNetSpymaster:
 
         n_target_words = len(target_words)
 
-        if self.verbose:
+        if self.verbose or True:
             print(f"Clue: {best_clue}, {n_target_words} ({target_words})")
+            for target_word in target_words:
+                print(f"{target_word}: {self.paths_to_nn[target_word][best_clue]}")
+            print()
 
-        self.given_clues.append(best_clue)
+        """
+        Keep track of lemmatized versions of given clues so that the bot doesn't repeat itself
+        or give "category" followed by "categories"
+        """
+        self.given_clues.append(self.lemmatizer.lemmatize(best_clue))
 
         return best_clue, n_target_words
 
     def get_clue_for_target_words(self, target_words, opp_words, bystanders, assassin):
-        potential_clues = set()
-        for target_word in target_words:
-            nns = self.weighted_nns[target_word].keys()
-            potential_clues.update(nns)
+        # Potential clues are the union of the sets of similar words from all target words
+        potential_clues = set.intersection(*[set(self.weighted_nns[target_word].keys()) for target_word in target_words])
 
+        potential_clues = {clue for clue in potential_clues if
+                           # Don't give the same clue twice, or a variant of a previous clue
+                           self.lemmatizer.lemmatize(clue) not in self.given_clues and
+                           # Make sure clue would be valid according to Codenames rules
+                           self.is_valid_clue(clue)}
+
+        best_clue = "dummy clue"
         best_score = float('-inf')
 
         for clue in potential_clues:
-            # Don't give the same clue twice
-            if clue in self.given_clues:
-                continue
-
-            # Make sure clue would be valid according to Codenames rules
-            if not self.is_valid_clue(clue):
-                continue
-
             """
             babelnet_score is a score based on the clue's distance to the target words
             in the BabelNet graph
             """
             babelnet_score = 0
             for target_word in target_words:
-                if clue in self.weighted_nns[target_word]:
-                    babelnet_score += self.weighted_nns[target_word][clue]
-                else:
-                    babelnet_score += -1
+                babelnet_score += self.weighted_nns[target_word][clue]
+                # if clue in self.weighted_nns[target_word]:
+                #     babelnet_score += self.weighted_nns[target_word][clue]
+                # else:
+                #     babelnet_score += -1
 
             """
             opp_word_penalty is a penalty for clues that are similar to opponent words
@@ -280,7 +319,7 @@ class BabelNetSpymaster:
             """
             detect_score = self.get_detect_score(clue, target_words, opp_words)
 
-            # TODO: add an agressiveness factor
+            # TODO: add an aggressiveness factor
             total_score = babelnet_score - 0.5 * opp_word_penalty + detect_score
 
             if total_score > best_score:
@@ -354,74 +393,182 @@ class BabelNetSpymaster:
         for target_word in target_words:
             if target_word in self.dict2vec_embeddings:
                 target_word_embedding = self.dict2vec_embeddings[target_word]
-                dict2vec_similarity = self.get_similarity(clue_embedding, target_word_embedding)
+                dict2vec_similarity = get_similarity(clue_embedding, target_word_embedding)
                 target_word_similarity_sum += dict2vec_similarity
 
         max_opp_similarity = float('-inf')
         for opp_word in opp_words:
             if opp_word in self.dict2vec_embeddings:
                 opp_word_embedding = self.dict2vec_embeddings[opp_word]
-                opp_word_similarity = self.get_similarity(clue_embedding, opp_word_embedding)
+                opp_word_similarity = get_similarity(clue_embedding, opp_word_embedding)
                 if opp_word_similarity > max_opp_similarity:
                     max_opp_similarity = opp_word_similarity
 
         return target_word_similarity_sum - max_opp_similarity
 
-    def get_similarity(self, embedding1, embedding2):
-        """
-        :param embedding1: a dict2vec word embedding
-        :param embedding2: another dict2vec word embedding
-        returns: the cosine similarity of the two input embedding vectors
-        """
+    # relationship_types = set()
+    # relationship_groups = set()
 
-        cosine_distance = distance.cosine(embedding1, embedding2)
+    filter_obscure_senses = False
 
-        # Convert from cosine distance to cosine similarity
-        cosine_similarity = 1 - cosine_distance
-
-        return cosine_similarity
-
-    def get_similar_words(self, word):
+    def get_similar_words(self, word, max_dist=2):
+        print("Getting similar words for "+word)
+        print("Retrieving word subgraph")
         G = retrieve_bn_subgraph(word)
-        #print(nx.node_link_data(G))
+        print("Word subgraph retrieved")
 
         """
         Perform a breadth-first search on G, which should already
         be cut off at a maximum depth
         """
 
-        """
         word_synset_ids = G.graph['source_synset_ids']
-        similar_words = defaultdict(lambda: float('inf'))
+        similar_word_dists = defaultdict(lambda: float('inf'))
+        word_paths = {}
         visited_synset_ids = set(word_synset_ids)
         synset_queue = queue.Queue()
-        """
 
         """
         Each synset that the lemma belongs to is given a distance of 0 
         and has no previous relation (represented by "source")
         """
-        """
+        print("Initializing search queue")
+        exclude_named_entities = True
+        if all([G.nodes[synset_id]['type'] == 'NAMED_ENTITY' for synset_id in word_synset_ids]):
+            exclude_named_entities = False
+
         for synset_id in word_synset_ids:
+            # Disallowing named entity synsets
+            if exclude_named_entities and G.nodes[synset_id]['type'] == 'NAMED_ENTITY':
+                continue
+
+            synset_hypernyms = self.get_hypernym_synsets(G, synset_id)
+            single_word_synset_lemmas = {sense['normalizedLemma'] for sense in G.nodes[synset_id]['senses'] if '_' not in sense['normalizedLemma']}
+            lemma_sims = [self.similarity_to_synset(lemma, G.nodes[synset_id], synset_hypernyms) for lemma in single_word_synset_lemmas]
+            sims_std = np.std(lemma_sims)
+            if sims_std != 0:
+                sims_mean = np.mean(lemma_sims)
+                word_sim = self.similarity_to_synset(word, G.nodes[synset_id], synset_hypernyms)
+                word_sim_z_score = (word_sim - sims_mean) / sims_std
+                if self.filter_obscure_senses and word_sim_z_score < -1:
+                    continue
+
             G.nodes[synset_id]['dist'] = 0
             G.nodes[synset_id]['prev_relation'] = 'source'
+            G.nodes[synset_id]['path'] = [synset_id]
             synset_queue.put(synset_id)
 
+        print("Performing BFS")
         while not synset_queue.empty():
-            cur = synset_queue.get()
-            for lemma in G.nodes[cur]['senses']:
-                # Update similar_words dict if better path found
-                if G.nodes[cur]['dist'] < similar_words[lemma]:
-                    similar_words[lemma] = G.nodes[cur]['dist']
-            for relation in G.adj[cur]:
-                synset_queue.put(relation)
+            cur_id = synset_queue.get()
+            cur_node = G.nodes[cur_id]
+            dist = cur_node['dist']
 
-        return similar_words
-        """
+            path = cur_node['path']
+            synset_hypernyms = self.get_hypernym_synsets(G, cur_id)
+            single_word_synset_lemmas = {sense['normalizedLemma'] for sense in G.nodes[cur_id]['senses'] if '_' not in sense['normalizedLemma']}
+            if len(single_word_synset_lemmas) != 0:
+                lemma_sims = [self.similarity_to_synset(lemma, G.nodes[cur_id], synset_hypernyms) for lemma in single_word_synset_lemmas]
+                sims_std = np.std(lemma_sims)
+                sims_mean = np.mean(lemma_sims)
+                for lemma in cur_node['senses']:
+                    if lemma['isAutomatic'] or lemma['lemmaType'] != 'HIGH_QUALITY':
+                        continue
+                    lemma_str = lemma['normalizedLemma']
+                    if '_' in lemma_str:
+                        continue
+                    for single_word_lemma in self.split_into_single_words(lemma_str):
+                        # Update similar_words dict if better path found
+                        if dist < similar_word_dists[single_word_lemma]:
+                            lemma_sim = self.similarity_to_synset(single_word_lemma, G.nodes[cur_id], synset_hypernyms)
+                            if sims_std != 0:
+                                lemma_sim_z_score = (lemma_sim - sims_mean) / sims_std
+                                if self.filter_obscure_senses and lemma_sim_z_score < -1:
+                                    continue
+                            similar_word_dists[single_word_lemma] = dist
+                            word_paths[single_word_lemma] = path
+            if dist == max_dist:
+                continue
+            relations = G.adj[cur_id]
+            for adj_synset_id in relations:
+                if adj_synset_id in visited_synset_ids:
+                    continue
+                prev_relation = cur_node['prev_relation']
+                relation_group = relations[adj_synset_id]['relationGroup']
+                if relation_group == 'OTHER':
+                    continue
+                relation_name = relations[adj_synset_id]['shortName']
+                # Only allow paths following the same relation
+                if relation_name != prev_relation and prev_relation != 'source':
+                    continue
+                # self.relationship_types.add(relation_name)
+                # self.relationship_groups.add(relations[adj_synset_id]['relationGroup'])
+                G.nodes[adj_synset_id]['dist'] = dist + 1
+                G.nodes[adj_synset_id]['prev_relation'] = relation_name
+                G.nodes[adj_synset_id]['path'] = path + [adj_synset_id]
+                synset_queue.put(adj_synset_id)
+                visited_synset_ids.add(adj_synset_id)
 
+        similar_word_similarities = {k: 1.0 / (v + 1) for k, v in similar_word_dists.items() if k != word}
+
+        print("Similar words obtained\n")
+
+        return similar_word_similarities, word_paths
+
+    def get_hypernym_synsets(self, G, synset_id):
+        hypernym_synsets = []
+
+        relations = G.adj[synset_id]
+        for adj_synset_id in relations:
+            relation_group = relations[adj_synset_id]['relationGroup']
+            if relation_group == 'HYPERNYM':
+                hypernym_synsets.append(G.nodes[adj_synset_id])
+
+        return hypernym_synsets
+
+    def similarity_to_synset(self, lemma, lemma_synset, hypernym_synsets):
+        if lemma not in self.dict2vec_embeddings:
+            return 0.0
+
+        lemma_embedding = self.dict2vec_embeddings[lemma]
+
+        used_synset_lemmas = set()
+        similarity = 0
+
+        all_synset_lemmas = [synset_sense['normalizedLemma'] for synset_sense in lemma_synset['senses']]
+        unique_synset_lemmas = {synset_lemma for synset_lemma in all_synset_lemmas if
+                                synset_lemma != lemma and '_' not in synset_lemma}
+        for synset_lemma in unique_synset_lemmas:
+            if synset_lemma in self.dict2vec_embeddings and synset_lemma not in used_synset_lemmas:
+                used_synset_lemmas.add(synset_lemma)
+                synset_lemma_embedding = self.dict2vec_embeddings[synset_lemma]
+                similarity += 1.5 * get_similarity(lemma_embedding, synset_lemma_embedding)
+
+        for synset in hypernym_synsets:
+            all_synset_lemmas = [synset_sense['normalizedLemma'] for synset_sense in synset['senses']]
+            unique_synset_lemmas = {synset_lemma for synset_lemma in all_synset_lemmas if synset_lemma != lemma and '_' not in synset_lemma}
+
+            for synset_lemma in unique_synset_lemmas:
+                if synset_lemma in self.dict2vec_embeddings and synset_lemma not in used_synset_lemmas:
+                    used_synset_lemmas.add(synset_lemma)
+                    synset_lemma_embedding = self.dict2vec_embeddings[synset_lemma]
+                    similarity += 1 * get_similarity(lemma_embedding, synset_lemma_embedding)
+
+        if len(used_synset_lemmas) == 0:
+            return 1
+
+        return similarity / len(used_synset_lemmas)
+
+    def split_into_single_words(self, lemma):
+        return lemma.split('_')
+
+
+    """
+    Old similar words generation method
+    """
     def get_weighted_nns(self, word, filter_entities=True):
         """
-        :param filter_entities: idk yet
+        :param filter_entities: whether to filter synsets that represent named entities as opposed to general concepts
         :param word: the codeword to get weighted nearest neighbors for
         returns: a dictionary mapping nearest neighbors (str) to distances from codeword (int)
         """
@@ -554,7 +701,7 @@ class BabelNetSpymaster:
         self.weighted_nns[word] = nn_w_similarities 
 
     """
-    Babelnet methods
+    Old Babelnet methods below
     """
 
     def get_cached_labels_from_synset_v5(self, synset, get_metadata=False):

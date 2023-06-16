@@ -3,7 +3,7 @@ import random
 from babelnet_bots.babelnet_bots import BabelNetSpymaster, BabelNetFieldOperative
 
 
-WORDLIST_FILEPATH = 'wordlists/test_words.txt'
+WORDLIST_FILEPATH = 'wordlists/codenames_words.txt'
 
 
 def main():
@@ -18,7 +18,7 @@ def main():
     spymaster_bot = BabelNetSpymaster(game_words)
     field_operative_bot = None
 
-    print_game_state(blue_words, red_words, bystanders, assassin)
+    # print_game_state(blue_words, red_words, bystanders, assassin)
 
     guessed_words = []
     lose = False
@@ -59,6 +59,8 @@ def main():
             if guess in blue_words:
                 print("Correct guess")
                 blue_words.remove(guess)
+            if not blue_words:
+                break
     if not lose:
         print("You guessed all the blue words, you win!")
     
@@ -67,15 +69,21 @@ def generate_new_board(words):
     game_words = random.sample(words, 25)
 
     # TODO: Give red or blue one extra word and civs one fewer
-    red_words = game_words[:8]
-    blue_words = game_words[8:16]
+    blue_words = game_words[:8]
+    red_words = game_words[8:16]
     bystanders = game_words[16:24]
     assassin = game_words[24]
+
+    # blue_words = ['center', 'crash', 'mail', 'poison', 'pole', 'shop', 'square', 'strike']
+    # red_words = ['capital', 'eagle', 'model', 'mount', 'plate', 'spy', 'tag', 'trunk']
+    # bystanders = ['apple', 'cap', 'crown', 'hollywood', 'pie', 'rome', 'ruler', 'spike']
+    # assassin = 'screen'
+    # game_words = blue_words + red_words + bystanders + [assassin]
 
     # Reorder the words on the board so you can't tell which color they are
     random.shuffle(game_words)
 
-    return game_words, red_words, blue_words, bystanders, assassin
+    return game_words, blue_words, red_words, bystanders, assassin
 
 
 def print_game_state(blue_words, red_words, bystanders, assassin):
