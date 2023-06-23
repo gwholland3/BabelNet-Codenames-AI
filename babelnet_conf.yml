@@ -1,0 +1,2 @@
+# This file is only required when using the local indices BabelNet-scraping code
+RPC_URL: "tcp://127.0.0.1:7790"
