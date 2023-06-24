@@ -24,12 +24,18 @@ OUTGOING_EDGES_URL = f'https://{BN_DOMAIN}/{BN_VERSION}/getOutgoingEdges'
 REQUIRED_BN_HEADERS = {'Accept-Encoding': 'gzip'}
 LANG = 'EN'
 
+# Labeled constants
 SRC_SYNSET = True
 NOT_SRC_SYNSET = False
 
 
 offline = False
 if offline:
+    """
+    This code won't work if you haven't installed and set up the BabelNet package to read from a local
+    copy of the BabelNet indices, see: https://babelnet.org/guide
+    """
+
     import babelnet as bn
     from babelnet import Language, BabelSynsetID
     from babelnet.synset import SynsetType
@@ -52,14 +58,20 @@ if offline:
     ]
 
 
-with open(API_KEY_FILEPATH) as f:
-    api_key = f.read().strip()
+online = False
+if online:
+    # Only needed/used in the online scraping at the bottom of this file and the old BabelNet code in `babelnet_bots.py`
+    with open(API_KEY_FILEPATH) as f:
+        api_key = f.read().strip()
+else:
+    api_key = None
 
 
 def retrieve_bn_subgraph(word):
     cached_bn_subgraph_filename = f'{CACHED_BN_SUBGRAPHS_DIR}/{word}.gz'
 
     if not os.path.exists(cached_bn_subgraph_filename):
+        # Construct and cache a subgraph of BabelNet for the given word if there is not already a cached subgraph available
         G = construct_bn_subgraph_offline(word)
         with gzip.open(cached_bn_subgraph_filename, 'wt', encoding='UTF-8') as zipfile:
             jsonlib.dump(nx.node_link_data(G), zipfile)
@@ -72,7 +84,7 @@ def retrieve_bn_subgraph(word):
 
 
 def construct_bn_subgraph_offline(word, max_path_len=10):
-    G = nx.DiGraph(source_synset_ids=[])
+    G = nx.DiGraph(source_synset_ids=[])  # Directed graph because edges in BabelNet are not symmetric
     synset_queue = queue.SimpleQueue()
     visited_synsets = set()
     skipped_synsets = set()
@@ -82,9 +94,17 @@ def construct_bn_subgraph_offline(word, max_path_len=10):
     word_synsets = bn.get_synsets(word, from_langs=[Language.EN])
     for word_synset in word_synsets:
         word_synset_id = str(word_synset.id)
+
+        """
+        get_synset_info() won't return `None` here because we know the synset 
+        contains at least one English sense, that of the lemma
+        """
         synset_info, synset_outgoing_edges = get_synset_info_offline(word_synset, SRC_SYNSET)
+
+        # Add source synset info to graph
         G.graph['source_synset_ids'].append(word_synset_id)
         G.add_node(word_synset_id, **synset_info)
+
         outgoing_edges[word_synset_id] = synset_outgoing_edges
         synset_queue.put(word_synset_id)
         visited_synsets.add(word_synset_id)
@@ -94,7 +114,10 @@ def construct_bn_subgraph_offline(word, max_path_len=10):
         next_level_synset_queue = queue.SimpleQueue()
         while not synset_queue.empty():
             synset_id = synset_queue.get()
+
+            # Retrieve all relevant neighbor synsets
             synset_outgoing_edges = outgoing_edges[synset_id]
+
             print(f"Expanding from synset with {len(synset_outgoing_edges)} edges: " + synset_id)
             for edge_info, target_synset_id in synset_outgoing_edges:
                 if target_synset_id in skipped_synsets:
@@ -102,6 +125,8 @@ def construct_bn_subgraph_offline(word, max_path_len=10):
                 if target_synset_id not in visited_synsets:
                     target_synset = bn.get_synset(BabelSynsetID(target_synset_id))
                     target_synset_info, target_synset_outgoing_edges = get_synset_info_offline(target_synset, NOT_SRC_SYNSET)
+
+                    # `target_synset_info` will be `None` if it has been determined to be an undesirable synset to visit
                     if target_synset_info:
                         G.add_node(target_synset_id, **target_synset_info)
                         outgoing_edges[target_synset_id] = target_synset_outgoing_edges
@@ -110,6 +135,8 @@ def construct_bn_subgraph_offline(word, max_path_len=10):
                     else:
                         skipped_synsets.add(target_synset_id)
                         continue
+
+                # Add edge to the graph even if target synset has already been visited, since the edge is unique
                 G.add_edge(synset_id, target_synset_id, **edge_info)
         synset_queue = next_level_synset_queue
 
@@ -121,13 +148,13 @@ def get_synset_info_offline(synset, is_src_synset):
 
     # Check if synset has any English senses
     if len(senses) == 0:
-        #print(f"Synset {synset.id} does not contain an English word sense... skipping")
+        # print(f"Synset {synset.id} does not contain an English word sense... skipping")
         return None, None
 
     # Check to make sure synset is a concept (as opposed to a named entity or unknown)
     # Source synsets are allowed to be non-concepts
     if not is_src_synset and synset.type != SynsetType.CONCEPT:
-        #print(f"Synset {synset.id} is not a concept... skipping")
+        # print(f"Synset {synset.id} is not a concept... skipping")
         return None, None
 
     synset_info = {
@@ -142,7 +169,10 @@ def get_synset_info_offline(synset, is_src_synset):
         'examples': [get_example_info(example) for example in synset.examples(language=Language.EN)],
         'mainExample': get_example_info(synset.main_example(language=Language.EN))
     }
+
+    # Filter outgoing edges to just hypernym relationships if not a source synset
     all_synset_outgoing_edges = synset.outgoing_edges() if is_src_synset else synset.outgoing_edges(*HYPERNYM_RELATIONSHIP_TYPES)
+    # Prune out edges we don't want to follow
     synset_outgoing_edges = [get_edge_info(edge) for edge in all_synset_outgoing_edges if should_follow_edge(edge)]
 
     return synset_info, synset_outgoing_edges
@@ -222,10 +252,16 @@ def construct_bn_subgraph_online(word, max_path_len=10):
 
     word_synset_ids = get_synsets_containing_lemma(word)
     for word_synset_id in word_synset_ids:
-        # get_synset_info() won't return None here because we know the synset 
-        # contains at least one English sense, that of the lemma
+        """
+        get_synset_info() won't return `None` here because we know the synset 
+        contains at least one English sense, that of the lemma
+        """
         synset_info = get_synset_info(word_synset_id)
+
+        # Add source synset info to graph
+        G.graph['source_synset_ids'].append(word_synset_id)
         G.add_node(word_synset_id, **synset_info)
+
         synset_queue.put(word_synset_id)
     visited_synsets = set(word_synset_ids)
     skipped_synsets = set()
@@ -235,7 +271,10 @@ def construct_bn_subgraph_online(word, max_path_len=10):
         next_level_synset_queue = queue.SimpleQueue()
         while not synset_queue.empty():
             synset_id = synset_queue.get()
+
+            # Retrieve all relevant neighbor synsets
             outgoing_edges = get_outgoing_edges(synset_id)
+
             for edge_info, target_synset_id in outgoing_edges:
                 if target_synset_id in skipped_synsets:
                     continue
@@ -249,6 +288,8 @@ def construct_bn_subgraph_online(word, max_path_len=10):
                         print(f"Synset {target_synset_id} does not contain an English word sense... skipping")
                         skipped_synsets.add(target_synset_id)
                         continue
+
+                # Add edge to the graph even if target synset has already been visited, since the edge is unique
                 G.add_edge(synset_id, target_synset_id, **edge_info)
         synset_queue = next_level_synset_queue
 
